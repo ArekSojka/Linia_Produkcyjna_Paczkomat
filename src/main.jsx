@@ -29,14 +29,14 @@ import './styles.css';
 const baseStages = [
   {
     id: crypto.randomUUID(),
-    name: 'Koryto i 11 zamkow',
+    name: 'Koryto',
     duration: 22,
     color: '#2563eb',
     icon: 'locks',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Piony i polki',
+    name: 'Piony',
     duration: 18,
     color: '#0891b2',
     icon: 'shelves',
@@ -105,7 +105,7 @@ const formatTime = (seconds) => {
   return `${minutes} min ${rest} s`;
 };
 
-const CONVEYOR_WIDTH = 3.58;
+const CONVEYOR_WIDTH = 4.5;
 const ROLLER_COLOR = '#e2e8f0';
 const CONVEYOR_UNITS_PER_SECOND = 1.42;
 const MIN_TRAVEL_SECONDS = 3.2;
@@ -149,7 +149,7 @@ const getStationSideOffset = (points, index, center) => {
     side.multiplyScalar(-1);
   }
 
-  return side.multiplyScalar(2.95);
+  return side.multiplyScalar(3.5);
 };
 
 const getTravelDurations = (stageCount) => {
@@ -742,11 +742,11 @@ function createLockerModel() {
   }
 
   const sideWalls = [];
-  [-1.44, 1.44].forEach((x, index) => {
-    const wall = makeBox(0.22, 0.62, ASSEMBLY_LENGTH, '#9fb3c5', 'horizontalSideWall');
-    wall.position.set(x, -0.04, 0);
+  [-2.1, 2.1].forEach((x, index) => {
+    const wall = makeBox(0.22, 1.12, ASSEMBLY_LENGTH, '#9fb3c5', 'horizontalSideWall');
+    wall.position.set(x, 0, 0);
     wall.userData.targetX = x;
-    wall.userData.targetY = -0.04;
+    wall.userData.targetY = 0;
     wall.userData.order = index;
     sideWalls.push(wall);
     horizontalContent.add(wall);
@@ -754,16 +754,16 @@ function createLockerModel() {
 
   const shelves = [];
   for (let index = 0; index < SHELF_COUNT; index += 1) {
-    const shelf = makeBox(2.7, 0.12, 0.16, '#dbe4ec', 'horizontalShelf');
-    shelf.position.set(0, -0.06, -2 + index * ASSEMBLY_ITEM_SPACING);
-    shelf.userData.targetY = -0.06;
+    const shelf = makeBox(4.02, 1.02, 0.1, '#dbe4ec', 'horizontalShelf');
+    shelf.position.set(0, 0, -2 + index * ASSEMBLY_ITEM_SPACING);
+    shelf.userData.targetY = 0;
     shelves.push(shelf);
     horizontalContent.add(shelf);
   }
 
-  const horizontalBack = makeBox(2.86, 0.1, ASSEMBLY_LENGTH - 0.08, '#b9c7d4', 'horizontalBackPanel');
-  horizontalBack.position.set(0, -0.22, 0);
-  horizontalBack.userData.targetY = -0.22;
+  const horizontalBack = makeBox(4.18, 0.1, ASSEMBLY_LENGTH - 0.08, '#b9c7d4', 'horizontalBackPanel');
+  horizontalBack.position.set(0, -0.56, 0);
+  horizontalBack.userData.targetY = -0.56;
   horizontalContent.add(horizontalBack);
 
   const horizontalCells = [];
@@ -773,16 +773,16 @@ function createLockerModel() {
     const z = -2 + row * ASSEMBLY_ITEM_SPACING;
     const cell = new THREE.Group();
     cell.name = `horizontalCell-${index + 1}`;
-    cell.position.set(direction * 0.72, 0.24, z);
-    cell.userData.targetX = direction * 0.72;
-    cell.userData.targetY = 0.24;
+    cell.position.set(direction * 1.04, 0.56, z);
+    cell.userData.targetX = direction * 1.04;
+    cell.userData.targetY = 0.56;
     cell.userData.meshes = [];
 
     [
-      [1.28, 0.05, 0.03, 0, 0, -0.17],
-      [1.28, 0.05, 0.03, 0, 0, 0.17],
-      [0.035, 0.05, 0.34, -0.64, 0, 0],
-      [0.035, 0.05, 0.34, 0.64, 0, 0],
+      [1.94, 0.05, 0.03, 0, 0, -0.17],
+      [1.94, 0.05, 0.03, 0, 0, 0.17],
+      [0.035, 0.05, 0.34, -0.97, 0, 0],
+      [0.035, 0.05, 0.34, 0.97, 0, 0],
     ].forEach(([width, height, depth, x, y, localZ]) => {
       const edge = makeBox(width, height, depth, '#475569', 'horizontalCellEdge');
       edge.position.set(x, y, localZ);
@@ -790,7 +790,7 @@ function createLockerModel() {
       cell.add(edge);
     });
 
-    const doorFace = makeBox(1.2, 0.075, 0.29, '#f8fafc', 'horizontalLockerDoor');
+    const doorFace = makeBox(1.86, 0.075, 0.29, '#f8fafc', 'horizontalLockerDoor');
     doorFace.position.y = 0.025;
     cell.userData.meshes.push(doorFace);
     cell.add(doorFace);
@@ -799,16 +799,27 @@ function createLockerModel() {
     horizontalContent.add(cell);
   }
 
-  const liftingBase = makeBox(3.45, 0.34, 0.82, '#365864', 'liftingBase');
+  const centerLockerTrim = makeBox(0.18, 0.1, 4.34, '#475569', 'centerLockerTrim');
+  centerLockerTrim.position.set(0, 0.61, 0);
+  centerLockerTrim.userData.targetY = 0.61;
+  horizontalContent.add(centerLockerTrim);
+
+  const liftingBase = makeBox(4.72, 0.34, 1.34, '#365864', 'liftingBase');
   liftingBase.position.set(0, -0.12, -ASSEMBLY_HALF_LENGTH);
   liftingBase.userData.targetZ = -ASSEMBLY_HALF_LENGTH;
   group.add(liftingBase);
 
-  const liftingRoof = makeBox(3.3, 0.22, 0.58, '#111827', 'liftingRoof');
-  liftingRoof.position.set(0, 0.3, ASSEMBLY_HALF_LENGTH + 0.08);
-  liftingRoof.userData.targetY = 0.3;
+  const liftingRoof = makeBox(4.58, 0.22, 0.58, '#111827', 'liftingRoof');
+  liftingRoof.position.set(0, 0.56, ASSEMBLY_HALF_LENGTH + 0.08);
+  liftingRoof.userData.targetY = 0.56;
   liftingRoof.userData.targetZ = ASSEMBLY_HALF_LENGTH + 0.08;
   horizontalContent.add(liftingRoof);
+
+  const liftingRoofPanel = makeBox(4.66, 1.34, 0.16, '#273746', 'liftingRoofPanel');
+  liftingRoofPanel.position.set(0, -0.04, ASSEMBLY_HALF_LENGTH + 0.02);
+  liftingRoofPanel.userData.targetY = -0.04;
+  liftingRoofPanel.userData.targetZ = ASSEMBLY_HALF_LENGTH + 0.02;
+  horizontalContent.add(liftingRoofPanel);
 
   const frameBeams = [];
   const makeBeam = (width, height, depth, x, y, z) => {
@@ -827,36 +838,36 @@ function createLockerModel() {
   makeBeam(0.11, 2.78, 0.16, 0, 1.5, 0.62);
   makeBeam(0.11, 2.78, 0.16, 1.02, 1.5, 0.62);
 
-  const body = makeBox(3.78, 2.72, 0.82, '#f8fafc', 'bodyPanel');
+  const body = makeBox(4.5, 2.72, 0.82, '#f8fafc', 'bodyPanel');
   body.position.set(0, 1.48, 0.2);
   group.add(body);
 
   const side = makeBox(0.18, 2.82, 0.88, '#ffffff', 'sidePanel');
-  side.position.set(2.04, 1.48, 0.08);
+  side.position.set(2.38, 1.48, 0.08);
   group.add(side);
 
-  const back = makeBox(4.06, 2.96, 0.1, '#e5e7eb', 'backPanel');
+  const back = makeBox(4.8, 2.96, 0.1, '#e5e7eb', 'backPanel');
   back.position.set(0, 1.48, -0.39);
   group.add(back);
 
-  const base = makeBox(4.18, 0.28, 1.02, '#0f2930', 'base');
+  const base = makeBox(4.9, 0.28, 1.02, '#0f2930', 'base');
   base.position.set(0, 0.05, 0.06);
   group.add(base);
 
-  const cap = makeBox(4.24, 0.28, 1.04, '#030712', 'cap');
+  const cap = makeBox(4.96, 0.28, 1.04, '#030712', 'cap');
   cap.position.set(0, 3.08, 0.06);
   group.add(cap);
 
   const topModules = [];
   for (let index = 0; index < 8; index += 1) {
     const module = makeBox(0.48, 0.18, 0.12, '#020617', 'topModule');
-    module.position.set(-1.72 + index * 0.49, 3.24, 0.6);
+    module.position.set(-2.06 + index * 0.49, 3.24, 0.6);
     topModules.push(module);
     group.add(module);
   }
 
   const feet = [];
-  [-1.75, -0.45, 0.45, 1.75].forEach((x) => {
+  [-2.09, -0.69, 0.69, 2.09].forEach((x) => {
     const leg = makeBox(0.08, 0.26, 0.08, '#111827', 'leg');
     leg.position.set(x, -0.16, 0.18);
     feet.push(leg);
@@ -990,8 +1001,10 @@ function createLockerModel() {
     shelves,
     horizontalBack,
     horizontalCells,
+    centerLockerTrim,
     liftingBase,
     liftingRoof,
+    liftingRoofPanel,
     body,
     cap,
     side,
@@ -1101,11 +1114,11 @@ function updateLockerModel(group, unit, stage, time, stages) {
     lockerStageIndex,
     finalizeStageIndex,
   );
-  const horizontalAssemblyVisible = lockStageIndex >= 0
-    && unit.currentIndex >= lockStageIndex
-    && unit.currentIndex <= horizontalAssemblyEndIndex;
-  const verticalAssemblyVisible = horizontalAssemblyEndIndex < 0
-    || unit.currentIndex > horizontalAssemblyEndIndex;
+  const usesHorizontalAssembly = lockStageIndex >= 0 && horizontalAssemblyEndIndex >= lockStageIndex;
+  const horizontalAssemblyVisible = usesHorizontalAssembly
+    && unit.currentIndex >= lockStageIndex;
+  setPartVisible(parts.horizontalAssembly, horizontalAssemblyVisible);
+  const verticalAssemblyVisible = !usesHorizontalAssembly;
   const frameBuild = verticalAssemblyVisible
     ? frameStageIndex >= 0
       ? getBuildForIcon('frame')
@@ -1127,7 +1140,8 @@ function updateLockerModel(group, unit, stage, time, stages) {
       ? Math.max(0, Math.min(lockBuild * LOCK_COUNT - index, 1))
       : 0;
     const lockProgress = easeOut(rawLockProgress);
-    lock.visible = lockProgress > 0.01;
+    const shouldLocksBeVisible = unit.currentIndex === lockStageIndex && rawLockProgress > 0.01;
+    lock.visible = shouldLocksBeVisible;
     lock.position.z = 0.62 + (1 - lockProgress) * 0.9;
     lock.position.x = Math.sin((1 - lockProgress) * Math.PI) * 0.2;
     lock.rotation.z = (1 - lockProgress) * 0.42;
@@ -1181,9 +1195,9 @@ function updateLockerModel(group, unit, stage, time, stages) {
   });
 
   const horizontalBackProgress = horizontalAssemblyVisible ? easeOut(backBuild) : 0;
-  setPartOpacity(parts.horizontalBack, horizontalBackProgress);
-  parts.horizontalBack.position.y = parts.horizontalBack.userData.targetY
-    - (1 - horizontalBackProgress) * 0.82;
+  setPartOpacity(parts.horizontalBack, horizontalBackProgress > 0 ? 1 : 0);
+  parts.horizontalBack.position.y = parts.horizontalBack.userData.targetY + (1 - horizontalBackProgress) * 1.2; // Animate from higher Y
+  parts.horizontalBack.rotation.x = (1 - horizontalBackProgress) * Math.PI / 2; // Rotate around X to simulate falling
   parts.horizontalBack.rotation.z = (1 - horizontalBackProgress) * 0.08;
 
   parts.horizontalCells.forEach((cell, index) => {
@@ -1199,34 +1213,53 @@ function updateLockerModel(group, unit, stage, time, stages) {
     cell.userData.meshes.forEach((mesh) => setPartOpacity(mesh, cellProgress));
   });
 
+  const centerTrimProgress = horizontalAssemblyVisible
+    ? easeOut(Math.max(0, Math.min(lockerHorizontalBuild * 4, 1)))
+    : 0;
+  setPartOpacity(parts.centerLockerTrim, centerTrimProgress);
+  parts.centerLockerTrim.position.y = parts.centerLockerTrim.userData.targetY
+    + (1 - centerTrimProgress) * 0.48;
+
   const finalizeActive = finalizeStageIndex >= 0 && unit.currentIndex === finalizeStageIndex;
-  const liftProgress = finalizeActive
-    ? easeOut(Math.max(0, Math.min((finalizeBuild - 0.22) / 0.78, 1)))
-    : 0;
+  const finalizeCompleted = finalizeStageIndex >= 0 && unit.currentIndex > finalizeStageIndex;
+  const liftProgress = finalizeCompleted
+    ? 1
+    : finalizeActive
+      ? easeOut(Math.max(0, Math.min((finalizeBuild - 0.12) / 0.58, 1)))
+      : 0;
   parts.horizontalAssembly.rotation.x = -Math.PI * 0.5 * liftProgress;
-  const liftingBaseProgress = finalizeActive
-    ? easeOut(Math.max(0, Math.min((finalizeBuild - 0.05) / 0.3, 1)))
-    : 0;
+  const liftingBaseProgress = finalizeCompleted
+    ? 1
+    : finalizeActive
+      ? easeOut(Math.max(0, Math.min((finalizeBuild - 0.04) / 0.28, 1)))
+      : 0;
   setPartOpacity(parts.liftingBase, liftingBaseProgress);
   parts.liftingBase.position.z = parts.liftingBase.userData.targetZ
     - (1 - liftingBaseProgress) * 0.85;
-  const liftingRoofProgress = finalizeActive
-    ? easeOut(Math.max(0, Math.min((finalizeBuild - 0.08) / 0.38, 1)))
-    : 0;
+  const liftingRoofProgress = finalizeCompleted
+    ? 1
+    : finalizeActive
+      ? easeOut(Math.max(0, Math.min((finalizeBuild - 0.72) / 0.28, 1)))
+      : 0;
   setPartOpacity(parts.liftingRoof, liftingRoofProgress);
-  parts.liftingRoof.position.y = parts.liftingRoof.userData.targetY
-    + (1 - liftingRoofProgress) * 0.72;
+  parts.liftingRoof.position.y = parts.liftingRoof.userData.targetY;
   parts.liftingRoof.position.z = parts.liftingRoof.userData.targetZ
-    + (1 - liftingRoofProgress) * 0.42;
+    + (1 - liftingRoofProgress) * 0.9;
+  setPartOpacity(parts.liftingRoofPanel, liftingRoofProgress);
+  parts.liftingRoofPanel.position.y = parts.liftingRoofPanel.userData.targetY;
+  parts.liftingRoofPanel.position.z = parts.liftingRoofPanel.userData.targetZ
+    + (1 - liftingRoofProgress) * 0.9;
 
   parts.frameBeams.forEach((beam, index) => {
     const beamProgress = Math.max(0, Math.min(frameBuild * parts.frameBeams.length - index, 1));
     setPartOpacity(beam, frameBuild > 0 ? 0.18 + beamProgress * 0.82 : 0);
   });
   setPartOpacity(parts.base, Math.min(1, frameBuild * 1.35));
-  setPartOpacity(parts.cap, Math.min(1, roofBuild * 1.2));
+  setPartOpacity(parts.cap, verticalAssemblyVisible ? Math.min(1, roofBuild * 1.2) : 0);
   parts.topModules.forEach((module, index) => {
-    const moduleProgress = Math.max(0, Math.min(roofBuild * parts.topModules.length - index, 1));
+    const moduleProgress = verticalAssemblyVisible
+      ? Math.max(0, Math.min(roofBuild * parts.topModules.length - index, 1))
+      : 0;
     setPartOpacity(module, moduleProgress);
     module.position.y = 3.24 + (1 - moduleProgress) * 0.34;
   });
@@ -1305,10 +1338,10 @@ function updateLockerModel(group, unit, stage, time, stages) {
     });
   }
 
-  if (isIconActive('roof')) {
+  if (isIconActive('finalize')) {
     const roofPulse = 1 + Math.sin(time * 3.8) * 0.018 * (1 - normalizedProgress * 0.4);
     parts.cap.scale.set(1, roofPulse, 1);
-    parts.cap.position.y = 3.08 + (1 - roofBuild) * 0.42;
+    parts.cap.position.y = 3.08 + (1 - finalizeBuild) * 0.42;
     parts.cap.material.emissive = new THREE.Color('#38bdf8');
     parts.cap.material.emissiveIntensity = 0.18 + Math.sin(time * 4.2) * 0.08;
   } else {
@@ -1618,7 +1651,7 @@ function ThreeProductionScene({ stages, visibleUnits }) {
         const isHorizontalAssembly = ['locks', 'shelves', 'back', 'door', 'lockers', 'finalize'].includes(stage?.icon);
         model.visible = true;
         model.position.copy(pose.position);
-        model.position.y = isHorizontalAssembly ? 0.82 : 0.82 + Math.sin(time * 2 + unit.number) * 0.018;
+        model.position.y = isHorizontalAssembly ? 1.22 : 1.22 + Math.sin(time * 2 + unit.number) * 0.018;
         model.rotation.y += Math.atan2(Math.sin(pose.angle - model.rotation.y), Math.cos(pose.angle - model.rotation.y)) * 0.16;
         model.scale.setScalar(unit.number === 1 ? 0.88 : 0.78);
         updateLockerModel(model, unit, stage, time, latestRef.current.stages);
