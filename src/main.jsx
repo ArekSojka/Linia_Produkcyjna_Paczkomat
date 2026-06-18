@@ -105,7 +105,10 @@ const formatTime = (seconds) => {
   return `${minutes} min ${rest} s`;
 };
 
-const CONVEYOR_WIDTH = 4.5;
+const CONVEYOR_WIDTH = 6.2;
+const CONVEYOR_RAIL_OFFSET = CONVEYOR_WIDTH / 2 - 0.35;
+const ROLLER_LENGTH = CONVEYOR_WIDTH - 0.85;
+const STATION_SIDE_DISTANCE = CONVEYOR_WIDTH / 2 + 1.25;
 const ROLLER_COLOR = '#e2e8f0';
 const CONVEYOR_UNITS_PER_SECOND = 1.42;
 const MIN_TRAVEL_SECONDS = 3.2;
@@ -149,7 +152,7 @@ const getStationSideOffset = (points, index, center) => {
     side.multiplyScalar(-1);
   }
 
-  return side.multiplyScalar(3.5);
+  return side.multiplyScalar(STATION_SIDE_DISTANCE);
 };
 
 const getTravelDurations = (stageCount) => {
@@ -743,7 +746,7 @@ function createLockerModel() {
 
   const sideWalls = [];
   [-2.1, 2.1].forEach((x, index) => {
-    const wall = makeBox(0.22, 1.12, ASSEMBLY_LENGTH, '#9fb3c5', 'horizontalSideWall');
+    const wall = makeBox(0.22, 1.12, ASSEMBLY_LENGTH, '#111318', 'horizontalSideWall');
     wall.position.set(x, 0, 0);
     wall.userData.targetX = x;
     wall.userData.targetY = 0;
@@ -761,7 +764,7 @@ function createLockerModel() {
     horizontalContent.add(shelf);
   }
 
-  const horizontalBack = makeBox(4.18, 0.1, ASSEMBLY_LENGTH - 0.08, '#b9c7d4', 'horizontalBackPanel');
+  const horizontalBack = makeBox(4.18, 0.1, ASSEMBLY_LENGTH - 0.08, '#15181d', 'horizontalBackPanel');
   horizontalBack.position.set(0, -0.56, 0);
   horizontalBack.userData.targetY = -0.56;
   horizontalContent.add(horizontalBack);
@@ -804,10 +807,15 @@ function createLockerModel() {
   centerLockerTrim.userData.targetY = 0.61;
   horizontalContent.add(centerLockerTrim);
 
-  const liftingBase = makeBox(4.72, 0.34, 1.34, '#365864', 'liftingBase');
+  const liftingBase = makeBox(4.72, 0.34, 1.34, '#0d1014', 'liftingBase');
   liftingBase.position.set(0, -0.12, -ASSEMBLY_HALF_LENGTH);
   liftingBase.userData.targetZ = -ASSEMBLY_HALF_LENGTH;
   group.add(liftingBase);
+
+  const liftingBaseFront = makeBox(4.48, 0.3, 0.14, '#090b0e', 'liftingBaseFront');
+  liftingBaseFront.position.set(0, 0.09, -ASSEMBLY_HALF_LENGTH - 0.6);
+  liftingBaseFront.userData.targetZ = -ASSEMBLY_HALF_LENGTH - 0.6;
+  group.add(liftingBaseFront);
 
   const liftingRoof = makeBox(4.58, 0.22, 0.58, '#111827', 'liftingRoof');
   liftingRoof.position.set(0, 0.56, ASSEMBLY_HALF_LENGTH + 0.08);
@@ -1003,6 +1011,7 @@ function createLockerModel() {
     horizontalCells,
     centerLockerTrim,
     liftingBase,
+    liftingBaseFront,
     liftingRoof,
     liftingRoofPanel,
     body,
@@ -1235,6 +1244,9 @@ function updateLockerModel(group, unit, stage, time, stages) {
       : 0;
   setPartOpacity(parts.liftingBase, liftingBaseProgress);
   parts.liftingBase.position.z = parts.liftingBase.userData.targetZ
+    - (1 - liftingBaseProgress) * 0.85;
+  setPartOpacity(parts.liftingBaseFront, liftingBaseProgress);
+  parts.liftingBaseFront.position.z = parts.liftingBaseFront.userData.targetZ
     - (1 - liftingBaseProgress) * 0.85;
   const liftingRoofProgress = finalizeCompleted
     ? 1
@@ -1585,19 +1597,19 @@ function ThreeProductionScene({ stages, visibleUnits }) {
           new THREE.BoxGeometry(0.22, 0.58, length + 0.16),
           makeMaterial('#334155', 0.55, 0.34),
         );
-        railLeft.position.set(-1.92, 0.24, 0);
+        railLeft.position.set(-CONVEYOR_RAIL_OFFSET, 0.24, 0);
         railLeft.castShadow = true;
         conveyor.add(railLeft);
 
         const railRight = railLeft.clone();
-        railRight.position.x = 1.92;
+        railRight.position.x = CONVEYOR_RAIL_OFFSET;
         conveyor.add(railRight);
 
         const rollerCount = Math.max(12, Math.floor(length / 0.34));
         for (let rollerIndex = 0; rollerIndex < rollerCount; rollerIndex += 1) {
           const z = -length / 2 + (rollerIndex / Math.max(rollerCount - 1, 1)) * length;
           const roller = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.18, 0.18, 3.28, 30),
+            new THREE.CylinderGeometry(0.18, 0.18, ROLLER_LENGTH, 30),
             rollerMaterial,
           );
           roller.rotation.z = Math.PI / 2;
