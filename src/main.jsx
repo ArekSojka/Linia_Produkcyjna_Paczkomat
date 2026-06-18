@@ -29,36 +29,29 @@ import './styles.css';
 const baseStages = [
   {
     id: crypto.randomUUID(),
-    name: 'Koryto',
-    duration: 22,
+    name: '2 koryta i 22 zamki',
+    duration: 24,
     color: '#2563eb',
     icon: 'locks',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Piony',
-    duration: 18,
+    name: 'Sciany boczne i polki',
+    duration: 24,
     color: '#0891b2',
     icon: 'shelves',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Plecy',
-    duration: 12,
-    color: '#f59e0b',
-    icon: 'back',
-  },
-  {
-    id: crypto.randomUUID(),
-    name: 'Skrytki',
-    duration: 18,
+    name: '22 skrytki',
+    duration: 22,
     color: '#16a34a',
     icon: 'lockers',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Podstawa i daszek',
-    duration: 16,
+    name: 'Polaczenie, plecy i dachy',
+    duration: 28,
     color: '#7c3aed',
     icon: 'finalize',
   },
@@ -72,7 +65,7 @@ const iconOptions = [
   { value: 'door', label: 'Drzwi' },
   { value: 'roof', label: 'Dach' },
   { value: 'lockers', label: 'Skrytki' },
-  { value: 'finalize', label: 'Podstawa i daszek' },
+  { value: 'finalize', label: 'Polaczenie, plecy i dachy' },
   { value: 'electronics', label: 'Elektronika' },
   { value: 'test', label: 'Test' },
   { value: 'box', label: 'Montaz' },
@@ -112,9 +105,11 @@ const STATION_SIDE_DISTANCE = CONVEYOR_WIDTH / 2 + 1.25;
 const ROLLER_COLOR = '#e2e8f0';
 const CONVEYOR_UNITS_PER_SECOND = 1.42;
 const MIN_TRAVEL_SECONDS = 3.2;
-const LOCK_COUNT = 11;
-const LOCKER_COUNT = LOCK_COUNT * 2;
-const SHELF_COUNT = LOCK_COUNT;
+const LOCKS_PER_MODULE = 11;
+const MODULE_COUNT = 2;
+const LOCK_COUNT = LOCKS_PER_MODULE * MODULE_COUNT;
+const LOCKER_COUNT = LOCK_COUNT;
+const SHELF_COUNT = LOCKS_PER_MODULE;
 const ASSEMBLY_LENGTH = 4.8;
 const ASSEMBLY_HALF_LENGTH = ASSEMBLY_LENGTH / 2;
 const ASSEMBLY_ITEM_SPACING = 0.4;
@@ -1392,6 +1387,347 @@ function updateLockerModel(group, unit, stage, time, stages) {
   }
 }
 
+function createTwoPartLockerModel() {
+  const group = new THREE.Group();
+  group.scale.setScalar(0.74);
+
+  const moduleRoots = [];
+  const troughParts = [];
+  const lockRails = [];
+  const locks = [];
+  const sideWalls = [];
+  const shelves = [];
+  const lockerCells = [];
+  const moduleStartX = 1.48;
+  const moduleFinalX = 1.02;
+
+  for (let moduleIndex = 0; moduleIndex < MODULE_COUNT; moduleIndex += 1) {
+    const direction = moduleIndex === 0 ? -1 : 1;
+    const root = new THREE.Group();
+    root.name = `lockerModulePivot-${moduleIndex + 1}`;
+    root.position.set(direction * moduleStartX, 0, -ASSEMBLY_HALF_LENGTH);
+    root.userData.startX = direction * moduleStartX;
+    root.userData.finalX = direction * moduleFinalX;
+
+    const content = new THREE.Group();
+    content.position.z = ASSEMBLY_HALF_LENGTH;
+    root.add(content);
+    group.add(root);
+    moduleRoots.push(root);
+
+    const troughSpine = makeBox(0.14, 1.08, ASSEMBLY_LENGTH - 0.08, '#94a3b8', `standingTrough-${moduleIndex + 1}`);
+    troughSpine.position.set(0.9, 0, 0);
+    troughParts.push(troughSpine);
+    content.add(troughSpine);
+
+    [-0.49, 0.49].forEach((y, lipIndex) => {
+      const lip = makeBox(0.38, 0.1, ASSEMBLY_LENGTH - 0.04, '#cbd5e1', `standingTroughLip-${moduleIndex + 1}-${lipIndex + 1}`);
+      lip.position.set(0.78, y, 0);
+      troughParts.push(lip);
+      content.add(lip);
+    });
+
+    const lockSide = 0.7;
+    const lockRail = makeBox(0.12, 0.72, ASSEMBLY_LENGTH - 0.22, '#1f2937', `lockRail-${moduleIndex + 1}`);
+    lockRail.position.set(0.82, 0, 0);
+    lockRails.push(lockRail);
+    content.add(lockRail);
+
+    for (let row = 0; row < LOCKS_PER_MODULE; row += 1) {
+      const rowZ = -2 + row * ASSEMBLY_ITEM_SPACING;
+      const lock = new THREE.Group();
+      lock.name = `module-${moduleIndex + 1}-lock-${row + 1}`;
+      lock.position.set(lockSide, 0, rowZ);
+      lock.userData.targetX = lockSide;
+      lock.userData.entryX = -0.24;
+      lock.userData.targetY = 0;
+      lock.userData.moduleDirection = direction;
+
+      const housing = makeBox(0.26, 0.12, 0.15, '#111827', 'moduleLockHousing');
+      const latch = makeBox(0.13, 0.08, 0.08, '#facc15', 'moduleLockLatch');
+      latch.position.set(-0.16, 0.03, 0);
+      const pin = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.045, 0.045, 0.16, 16),
+        makeMaterial('#e5e7eb', 0.28, 0.72),
+      );
+      pin.rotation.x = Math.PI / 2;
+      pin.position.y = 0.08;
+      pin.castShadow = true;
+      lock.add(housing, latch, pin);
+      lock.userData.meshes = [housing, latch, pin];
+      locks.push(lock);
+      content.add(lock);
+    }
+
+    const wall = makeBox(0.22, 1.16, ASSEMBLY_LENGTH, '#111318', `moduleWall-${moduleIndex + 1}`);
+    wall.position.set(0.91, 0, 0);
+    wall.userData.targetX = 0.91;
+    wall.userData.targetY = 0;
+    wall.userData.entryDirection = 1;
+    sideWalls.push(wall);
+    content.add(wall);
+
+    for (let row = 0; row < LOCKS_PER_MODULE; row += 1) {
+      const shelf = makeBox(1.72, 1.02, 0.1, '#dbe4ec', `moduleShelf-${moduleIndex + 1}-${row + 1}`);
+      shelf.position.set(0, 0, -2 + row * ASSEMBLY_ITEM_SPACING);
+      shelf.userData.targetY = 0;
+      shelf.userData.moduleDirection = direction;
+      shelves.push(shelf);
+      content.add(shelf);
+
+      const cell = new THREE.Group();
+      cell.name = `moduleCell-${moduleIndex + 1}-${row + 1}`;
+      cell.position.set(0, 0.59, -2 + row * ASSEMBLY_ITEM_SPACING);
+      cell.userData.targetY = 0.59;
+      cell.userData.entryX = direction * 0.65;
+      cell.userData.meshes = [];
+
+      [
+        [1.72, 0.05, 0.035, 0, 0, -0.17],
+        [1.72, 0.05, 0.035, 0, 0, 0.17],
+        [0.045, 0.05, 0.34, -0.86, 0, 0],
+        [0.045, 0.05, 0.34, 0.86, 0, 0],
+      ].forEach(([width, height, depth, x, y, z]) => {
+        const edge = makeBox(width, height, depth, '#3f4854', 'moduleCellEdge');
+        edge.position.set(x, y, z);
+        cell.userData.meshes.push(edge);
+        cell.add(edge);
+      });
+
+      const door = makeBox(1.63, 0.075, 0.29, '#f8fafc', 'moduleLockerDoor');
+      door.position.y = 0.025;
+      cell.userData.meshes.push(door);
+      cell.add(door);
+      lockerCells.push(cell);
+      content.add(cell);
+    }
+  }
+
+  const base = makeBox(4.58, 0.36, 1.38, '#0d1014', 'joinedBase');
+  base.position.set(0, -0.13, -ASSEMBLY_HALF_LENGTH);
+  base.userData.targetY = -0.13;
+  group.add(base);
+
+  const baseFront = makeBox(4.34, 0.3, 0.14, '#090b0e', 'joinedBaseFront');
+  baseFront.position.set(0, 0.09, -ASSEMBLY_HALF_LENGTH - 0.62);
+  baseFront.userData.targetY = 0.09;
+  group.add(baseFront);
+
+  const backPanel = makeBox(4.12, ASSEMBLY_LENGTH - 0.12, 0.12, '#15181d', 'joinedBackPanel');
+  backPanel.position.set(0, ASSEMBLY_HALF_LENGTH, -1.83);
+  backPanel.userData.targetY = ASSEMBLY_HALF_LENGTH;
+  backPanel.userData.targetZ = -1.83;
+  group.add(backPanel);
+
+  const centerJoin = makeBox(0.17, ASSEMBLY_LENGTH - 0.35, 0.13, '#252b33', 'centerJoinProfile');
+  centerJoin.position.set(0, ASSEMBLY_HALF_LENGTH, -3.0);
+  centerJoin.userData.targetY = ASSEMBLY_HALF_LENGTH;
+  centerJoin.userData.targetZ = -3.0;
+  group.add(centerJoin);
+
+  const roofs = [];
+  const roofFascias = [];
+  [-moduleFinalX, moduleFinalX].forEach((x, index) => {
+    const roof = makeBox(2.18, 0.18, 1.42, '#202832', `moduleRoof-${index + 1}`);
+    roof.position.set(x, ASSEMBLY_LENGTH + 0.08, -ASSEMBLY_HALF_LENGTH);
+    roof.userData.targetY = ASSEMBLY_LENGTH + 0.08;
+    roofs.push(roof);
+    group.add(roof);
+
+    const fascia = makeBox(2.15, 0.48, 0.2, '#090b0e', `moduleRoofFascia-${index + 1}`);
+    fascia.position.set(x, ASSEMBLY_LENGTH - 0.04, -ASSEMBLY_HALF_LENGTH - 0.62);
+    fascia.userData.targetY = ASSEMBLY_LENGTH - 0.04;
+    roofFascias.push(fascia);
+    group.add(fascia);
+  });
+
+  const roofJoinSeam = makeBox(0.08, 0.05, 1.32, '#05070a', 'roofJoinSeam');
+  roofJoinSeam.position.set(0, ASSEMBLY_LENGTH + 0.195, -ASSEMBLY_HALF_LENGTH);
+  roofJoinSeam.userData.targetY = ASSEMBLY_LENGTH + 0.195;
+  group.add(roofJoinSeam);
+
+  const warningLight = new THREE.Group();
+  warningLight.position.set(0, ASSEMBLY_LENGTH + 0.72, -ASSEMBLY_HALF_LENGTH - 0.5);
+  const warningPost = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.04, 0.04, 0.42, 14),
+    makeMaterial('#334155', 0.45, 0.28),
+  );
+  warningPost.position.y = -0.18;
+  const warningBulb = new THREE.Mesh(
+    new THREE.SphereGeometry(0.16, 24, 18),
+    new THREE.MeshStandardMaterial({
+      color: '#dc2626',
+      emissive: '#dc2626',
+      emissiveIntensity: 0,
+      roughness: 0.35,
+    }),
+  );
+  const warningGlow = new THREE.PointLight('#ef4444', 0, 2.8);
+  warningGlow.position.y = 0.1;
+  warningLight.add(warningPost, warningBulb, warningGlow);
+  warningLight.visible = false;
+  group.add(warningLight);
+
+  group.userData.parts = {
+    moduleRoots,
+    troughParts,
+    lockRails,
+    locks,
+    sideWalls,
+    shelves,
+    lockerCells,
+    base,
+    baseFront,
+    backPanel,
+    centerJoin,
+    roofs,
+    roofFascias,
+    roofJoinSeam,
+    warningLight,
+    warningBulb,
+    warningGlow,
+  };
+
+  return group;
+}
+
+function updateTwoPartLockerModel(group, unit, stage, time, stages) {
+  const parts = group.userData.parts;
+  const stageProgress = unit.assemblyProgress ?? unit.progress ?? 0;
+  const normalizedProgress = THREE.MathUtils.clamp(stageProgress / 100, 0, 1);
+  const stageIndex = (icon) => stages.findIndex((candidate) => candidate.icon === icon);
+  const buildFor = (icon) => {
+    const index = stageIndex(icon);
+    if (index < 0 || unit.currentIndex < index) return 0;
+    if (unit.currentIndex > index) return 1;
+    return normalizedProgress;
+  };
+  const smooth = (value) => easeOut(THREE.MathUtils.clamp(value, 0, 1));
+  const locksBuild = buildFor('locks');
+  const structureBuild = buildFor('shelves');
+  const lockersBuild = buildFor('lockers');
+  const finalizeIndex = stageIndex('finalize');
+  const finalizeCompleted = finalizeIndex >= 0 && unit.currentIndex > finalizeIndex;
+  const finalizeBuild = finalizeCompleted ? 1 : buildFor('finalize');
+
+  const trayProgress = smooth(locksBuild / 0.12);
+  const troughVisibility = 1 - smooth(lockersBuild);
+  parts.troughParts.forEach((part, index) => {
+    const progress = smooth(trayProgress * parts.troughParts.length - index * 0.32);
+    setPartOpacity(part, progress * troughVisibility);
+    part.scale.z = 0.72 + progress * 0.28;
+  });
+  const lockRailVisibility = 1 - smooth(lockersBuild);
+  parts.lockRails.forEach((rail) => {
+    setPartOpacity(rail, smooth((locksBuild - 0.05) / 0.15) * lockRailVisibility);
+  });
+
+  const lockTimeline = Math.max(0, (locksBuild - 0.14) / 0.86) * LOCK_COUNT;
+  parts.locks.forEach((lock, index) => {
+    const rawProgress = THREE.MathUtils.clamp(lockTimeline - index, 0, 1);
+    const progress = smooth(rawProgress);
+    const matchingLockerProgress = smooth(
+      THREE.MathUtils.clamp(lockersBuild * LOCKER_COUNT - index, 0, 1),
+    );
+    const visibleProgress = progress * (1 - matchingLockerProgress);
+    lock.visible = visibleProgress > 0.01;
+    lock.position.x = THREE.MathUtils.lerp(lock.userData.entryX, lock.userData.targetX, progress);
+    lock.position.y = lock.userData.targetY + Math.sin(progress * Math.PI) * 0.12;
+    lock.rotation.z = (1 - progress) * 0.22;
+    lock.scale.setScalar(0.76 + progress * 0.24);
+    lock.userData.meshes.forEach((mesh) => {
+      setPartOpacity(mesh, visibleProgress);
+      mesh.material.emissive = new THREE.Color('#facc15');
+      mesh.material.emissiveIntensity = rawProgress > 0 && rawProgress < 1
+        ? 0.28 + Math.sin(time * 8 + index) * 0.1
+        : 0;
+    });
+  });
+
+  const wallTimeline = Math.min(structureBuild / 0.28, 1) * parts.sideWalls.length;
+  parts.sideWalls.forEach((wall, index) => {
+    const progress = smooth(THREE.MathUtils.clamp(wallTimeline - index, 0, 1));
+    setPartOpacity(wall, progress);
+    wall.position.x = wall.userData.targetX + wall.userData.entryDirection * (1 - progress) * 0.32;
+    wall.position.y = wall.userData.targetY + (1 - progress) * 1.15;
+    wall.rotation.z = wall.userData.entryDirection * (1 - progress) * 0.12;
+  });
+
+  const shelfTimeline = Math.max(0, (structureBuild - 0.28) / 0.72) * parts.shelves.length;
+  parts.shelves.forEach((shelf, index) => {
+    const rawProgress = THREE.MathUtils.clamp(shelfTimeline - index, 0, 1);
+    const progress = smooth(rawProgress);
+    setPartOpacity(shelf, progress);
+    shelf.position.y = shelf.userData.targetY + (1 - progress) * 0.95;
+    shelf.position.x = (1 - progress) * shelf.userData.moduleDirection * 0.45;
+    shelf.rotation.z = (1 - progress) * shelf.userData.moduleDirection * 0.1;
+    shelf.material.emissive = new THREE.Color('#38bdf8');
+    shelf.material.emissiveIntensity = rawProgress > 0 && rawProgress < 1 ? 0.22 : 0;
+  });
+
+  const lockerTimeline = lockersBuild * LOCKER_COUNT;
+  parts.lockerCells.forEach((cell, index) => {
+    const rawProgress = THREE.MathUtils.clamp(lockerTimeline - index, 0, 1);
+    const progress = smooth(rawProgress);
+    cell.visible = progress > 0.01;
+    cell.position.x = (1 - progress) * cell.userData.entryX;
+    cell.position.y = cell.userData.targetY + (1 - progress) * 0.72;
+    cell.rotation.z = (1 - progress) * Math.sign(cell.userData.entryX) * 0.14;
+    cell.scale.setScalar(0.8 + progress * 0.2);
+    cell.userData.meshes.forEach((mesh) => setPartOpacity(mesh, progress));
+  });
+
+  const baseProgress = smooth(finalizeBuild / 0.16);
+  [parts.base, parts.baseFront].forEach((part) => {
+    setPartOpacity(part, baseProgress);
+    part.position.y = part.userData.targetY - (1 - baseProgress) * 0.48;
+  });
+
+  const liftProgress = smooth((finalizeBuild - 0.08) / 0.46);
+  const joinProgress = smooth((finalizeBuild - 0.54) / 0.16);
+  parts.moduleRoots.forEach((root) => {
+    root.rotation.x = -Math.PI * 0.5 * liftProgress;
+    root.position.x = THREE.MathUtils.lerp(root.userData.startX, root.userData.finalX, joinProgress);
+  });
+
+  const centerProgress = smooth((finalizeBuild - 0.61) / 0.12);
+  setPartOpacity(parts.centerJoin, centerProgress);
+  parts.centerJoin.position.y = parts.centerJoin.userData.targetY + (1 - centerProgress) * 0.65;
+
+  const backProgress = smooth((finalizeBuild - 0.7) / 0.16);
+  setPartOpacity(parts.backPanel, backProgress);
+  parts.backPanel.position.y = parts.backPanel.userData.targetY;
+  parts.backPanel.position.z = parts.backPanel.userData.targetZ + (1 - backProgress) * 1.15;
+  parts.backPanel.rotation.y = (1 - backProgress) * 0.08;
+
+  parts.roofs.forEach((roof, index) => {
+    const progress = smooth((finalizeBuild - (0.84 + index * 0.025)) / 0.135);
+    setPartOpacity(roof, progress);
+    roof.position.y = roof.userData.targetY + (1 - progress) * 0.85;
+  });
+  parts.roofFascias.forEach((fascia, index) => {
+    const progress = smooth((finalizeBuild - (0.86 + index * 0.025)) / 0.115);
+    setPartOpacity(fascia, progress);
+    fascia.position.y = fascia.userData.targetY + (1 - progress) * 0.7;
+  });
+  const roofSeamProgress = smooth((finalizeBuild - 0.93) / 0.07);
+  setPartOpacity(parts.roofJoinSeam, roofSeamProgress);
+  parts.roofJoinSeam.position.y = parts.roofJoinSeam.userData.targetY
+    + (1 - roofSeamProgress) * 0.48;
+
+  parts.warningLight.visible = Boolean(unit.isBlocked);
+  if (unit.isBlocked) {
+    const pulse = 1 + Math.sin(time * 9) * 0.18;
+    parts.warningBulb.scale.setScalar(pulse);
+    parts.warningBulb.material.emissiveIntensity = 1.7 + Math.sin(time * 10) * 0.55;
+    parts.warningGlow.intensity = 1.7 + Math.sin(time * 10) * 0.65;
+  } else {
+    parts.warningBulb.scale.setScalar(1);
+    parts.warningBulb.material.emissiveIntensity = 0;
+    parts.warningGlow.intensity = 0;
+  }
+}
+
 function ThreeProductionScene({ stages, visibleUnits }) {
   const mountRef = useRef(null);
   const controlsRef = useRef(null);
@@ -1494,7 +1830,7 @@ function ThreeProductionScene({ stages, visibleUnits }) {
         if (lastFittedStageCount !== routePoints.length) {
           const cameraDistance = Math.max(14, routeLength * 1.12);
           controls.target.set(center.x, 0.75, center.z);
-          camera.position.set(center.x + cameraDistance * 0.72, cameraDistance * 0.55, center.z + cameraDistance * 0.72);
+          camera.position.set(center.x + cameraDistance * 0.72, cameraDistance * 0.55, center.z - cameraDistance * 0.72);
           controls.minDistance = 7;
           controls.maxDistance = Math.max(95, routeLength * 2.4);
           controls.update();
@@ -1653,7 +1989,7 @@ function ThreeProductionScene({ stages, visibleUnits }) {
         activeNumbers.add(unit.key);
         let model = lockers.get(unit.key);
         if (!model) {
-          model = createLockerModel();
+          model = createTwoPartLockerModel();
           lockers.set(unit.key, model);
           unitGroup.add(model);
         }
@@ -1666,7 +2002,7 @@ function ThreeProductionScene({ stages, visibleUnits }) {
         model.position.y = isHorizontalAssembly ? 1.22 : 1.22 + Math.sin(time * 2 + unit.number) * 0.018;
         model.rotation.y += Math.atan2(Math.sin(pose.angle - model.rotation.y), Math.cos(pose.angle - model.rotation.y)) * 0.16;
         model.scale.setScalar(unit.number === 1 ? 0.88 : 0.78);
-        updateLockerModel(model, unit, stage, time, latestRef.current.stages);
+        updateTwoPartLockerModel(model, unit, stage, time, latestRef.current.stages);
       });
 
       lockers.forEach((model, number) => {
@@ -1733,7 +2069,12 @@ function ThreeProductionScene({ stages, visibleUnits }) {
 }
 
 function ProductionLine({ stages, visibleUnits, conveyorDuration, productionFinished }) {
-  const leadUnit = visibleUnits[0] ?? { currentIndex: 0, progress: 0, number: 1 };
+  const leadUnit = visibleUnits[0] ?? {
+    currentIndex: productionFinished ? Math.max(stages.length - 1, 0) : 0,
+    progress: productionFinished ? 100 : 0,
+    assemblyProgress: productionFinished ? 100 : 0,
+    number: 1,
+  };
   const currentStage = stages[leadUnit.currentIndex] ?? (productionFinished ? stages[stages.length - 1] : stages[0]);
   const isFinished = productionFinished;
   const installedLockCount = Math.min(
@@ -1742,7 +2083,7 @@ function ProductionLine({ stages, visibleUnits, conveyorDuration, productionFini
   );
   const installedLockerCount = Math.min(
     LOCKER_COUNT,
-    Math.floor(((leadUnit.assemblyProgress ?? leadUnit.progress ?? 0) / 60) * LOCKER_COUNT),
+    Math.floor(((leadUnit.assemblyProgress ?? leadUnit.progress ?? 0) / 100) * LOCKER_COUNT),
   );
   const statusLabel = isFinished
     ? 'Seria zakonczona'
