@@ -33,28 +33,35 @@ import './styles.css';
 const baseStages = [
   {
     id: crypto.randomUUID(),
-    name: '2 koryta i 22 zamki',
+    name: 'Etap 0: podanie koryt',
+    duration: 2,
+    color: '#475569',
+    icon: 'trough',
+  },
+  {
+    id: crypto.randomUUID(),
+    name: 'Etap 1: montaz 22 zamkow',
     duration: 2,
     color: '#2563eb',
     icon: 'locks',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Sciany boczne i polki',
+    name: 'Etap 2: sciany boczne i polki',
     duration: 2,
     color: '#0891b2',
     icon: 'shelves',
   },
   {
     id: crypto.randomUUID(),
-    name: '22 skrytki',
+    name: 'Etap 3: montaz 22 skrytek',
     duration: 2,
     color: '#16a34a',
     icon: 'lockers',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Polaczenie, plecy i dachy',
+    name: 'Etap 4: polaczenie, plecy i dachy',
     duration: 2,
     color: '#7c3aed',
     icon: 'finalize',
@@ -62,6 +69,7 @@ const baseStages = [
 ];
 
 const iconOptions = [
+  { value: 'trough', label: 'Podanie koryt' },
   { value: 'locks', label: 'Koryto i zamki' },
   { value: 'shelves', label: 'Piony i polki' },
   { value: 'back', label: 'Plecy' },
@@ -76,6 +84,7 @@ const iconOptions = [
 ];
 
 const stageIcons = {
+  trough: Box,
   locks: LockKeyhole,
   shelves: Box,
   back: Box,
@@ -181,6 +190,9 @@ const TUNE = {
   // Rozstaw stacji = DLUGOSC ROLOTOKU i odstepy miedzy czesciami. Domyslnie
   // bylo 7.6; zwieksz, gdy czesci na siebie nachodza (np. 12, 14, 16).
   stationSpacing: 13,
+  // Dodatkowy bezpieczny luz ponad dlugosc polowy paczkomatu. Harmonogram
+  // przelicza go na czas potrzebny do fizycznego zwolnienia stacji.
+  partSafetyGap: 0.6,
   // Odstep miedzy KOLEJNYMI paczkomatami (w cyklach stacji). Po naprawie zajetosci
   // stacji (ogon) zwykle 0 wystarcza. Zwieksz, gdy paczkomaty nadal za blisko.
   launchGapStages: 0,
@@ -243,9 +255,7 @@ const TUNE = {
 const ASSEMBLY_LENGTH = 4.8;
 const ASSEMBLY_HALF_LENGTH = ASSEMBLY_LENGTH / 2;
 const ASSEMBLY_ITEM_SPACING = 0.4;
-// Model finalnego, gotowego produktu - uzywany w momencie "scalenia" animacji.
-// Wskazuje na model optymalny (paczkomatopytmalny.glb skopiowany do /models).
-const CAD_MODEL_URL = '/models/paczkomat-optimal.glb';
+const MODEL_RENDER_SCALE = 0.88;
 const LOCK_TROUGH_MODEL_URL = '/models/components/lock-trough.glb';
 const CENTER_TROUGH_MODEL_URL = '/models/components/trough-center.glb';
 const SMALL_TROUGH_LEFT_MODEL_URL = '/models/components/small-trough-left.glb';
@@ -271,7 +281,6 @@ const DOOR_XL_MODEL_URL = '/models/components/door-xl.glb';
 const DOOR_L_MODEL_URL = '/models/components/door-l.glb';
 const DOOR_S_MODEL_URL = '/models/components/door-s.glb';
 const DOOR_XS_MODEL_URL = '/models/components/door-xs.glb';
-const CAD_MODEL_HEIGHT = 3.45;
 const CONVEYOR_SURFACE_Y = CONVEYOR_ELEVATION + 0.55;
 
 const buildLinePoints = (count) => {
@@ -332,91 +341,220 @@ const normalizeTravelTimes = (travelTimes, stageCount) => {
   return defaults.map((defaultTime, index) => Math.max(0.1, clampNumber(travelTimes[index], defaultTime)));
 };
 
-const buildProductionSchedule = (stages, count, travelTimes = []) => {
+const buildProductionSchedule = (
+  stages,
+  count,
+  travelTimes = [],
+  measuredPartLength = ASSEMBLY_LENGTH * MODEL_RENDER_SCALE,
+) => {
   const stageCount = stages.length;
   const unitCount = Math.max(1, count);
   const travelDurations = normalizeTravelTimes(travelTimes, stageCount);
+  if (stageCount === 0) {
+    return {
+      units: [],
+      leadUnits: [],
+      trailUnits: [],
+      totalTime: 0.1,
+      launchInterval: 0.1,
+      soloCycleTime: 0.1,
+      travelDurations,
+      pairHeadway: 0,
+      finalStageIndex: -1,
+      partMinimumGap: 0,
+    };
+  }
+
+  // Kazda polowa jest osobnym nosnikiem produkcyjnym. Stacje i odcinki miedzy
+  // nimi sa wspolnymi zasobami, wiec w danej chwili moze z nich korzystac tylko
+  // jedna polowa. Ostatnia stacja jest wyjatkiem: wpuszcza sparowany ogon po
+  // zakonczeniu podnoszenia lidera, aby obie czesci mogly sie kontrolowanie zlaczyc.
   const stationFreeAt = Array(stageCount).fill(0);
-  const units = [];
+  const segmentFreeAt = Array(Math.max(stageCount - 1, 0)).fill(0);
+  let entryFreeAt = 0;
+  let finalStationFreeAt = 0;
+  const leadUnits = [];
+  const trailUnits = [];
 
-  // #4: dodatkowy odstep miedzy kolejnymi paczkomatami, zeby OGON (czesc 2)
-  // poprzedniego nie nachodzil na CZOLO (czesc 1) nastepnego. Wyrazony w
-  // "cyklach stacji" (etap + dojazd) - patrz TUNE.launchGapStages.
-  const stageCycle = (stages[0]?.duration ?? 2) + (travelDurations[0] ?? 2);
-  const launchGap = Math.max(TUNE.launchGapStages ?? 0, 0) * stageCycle;
-  let prevEntryStart = -Infinity;
+  const stageCycle = Math.max(stages[0]?.duration ?? 0.1, 0.1)
+    + (travelDurations[0] ?? MIN_TRAVEL_SECONDS);
+  const lagFromStages = Math.max(TUNE.partLagStages ?? 0, 0) * stageCycle;
+  const lagFromDistance = (
+    Math.abs(TUNE.partTrailSpacing ?? 0)
+    / Math.max(TUNE.stationSpacing ?? 7.6, 0.1)
+  ) * stageCycle;
+  const pairHeadway = Math.max(
+    TUNE.halfDelaySeconds ?? 0,
+    lagFromStages,
+    lagFromDistance,
+    0.1,
+  );
+  const productHeadway = Math.max(
+    pairHeadway,
+    Math.max(TUNE.launchGapStages ?? 0, 0) * stageCycle,
+  );
+  const finalStageIndex = stageCount - 1;
+  // Wszystkie modele GLB sa normalizowane do ASSEMBLY_LENGTH, a nastepnie
+  // renderowane w skali MODEL_RENDER_SCALE. To daje rzeczywista dlugosc
+  // nosnika na linii; dodajemy do niej regulowany margines bezpieczenstwa.
+  const partMinimumGap = Math.max(measuredPartLength, 0.1)
+    + Math.max(TUNE.partSafetyGap ?? 0, 0);
+  const stationSpacing = Math.max(TUNE.stationSpacing ?? 7.6, partMinimumGap + 0.01);
+  const getClearanceDuration = (travelDuration) => {
+    const distanceRatio = Math.min(Math.max(partMinimumGap / stationSpacing, 0), 0.98);
+    // Odwrotnosc easing: 0.5 - cos(progress * PI) / 2.
+    const progress = Math.acos(1 - 2 * distanceRatio) / Math.PI;
+    return travelDuration * progress;
+  };
+  const finalBufferDelay = (
+    Math.abs(TUNE.partTrailBuffer ?? 0) / stationSpacing
+  ) * (travelDurations[Math.max(finalStageIndex - 1, 0)] ?? MIN_TRAVEL_SECONDS);
 
-  for (let unitIndex = 0; unitIndex < unitCount; unitIndex += 1) {
+  const scheduleHalf = ({ number, role, desiredStart, finalEarliest }) => {
     const segments = [];
+    // Nie wpuszczamy kolejnej polowy na odcinek wejsciowy, jezeli nie bedzie
+    // mogla zwolnic go przy stacji 0. Eliminuje to kolejke wewnatrz modeli.
     const entryStart = Math.max(
-      stationFreeAt[0] ?? 0,
+      desiredStart,
+      entryFreeAt,
+      (stationFreeAt[0] ?? 0) - ENTRY_TRAVEL_SECONDS,
       0,
-      unitIndex === 0 ? 0 : prevEntryStart + launchGap,
     );
-    prevEntryStart = entryStart;
     let arrivalAtStage = entryStart + ENTRY_TRAVEL_SECONDS;
-    let finishTime = arrivalAtStage;
+    entryFreeAt = arrivalAtStage;
 
     segments.push({
       type: 'entry',
+      resource: 'entry',
       start: entryStart,
       end: arrivalAtStage,
       duration: ENTRY_TRAVEL_SECONDS,
     });
 
+    let finishTime = arrivalAtStage;
     for (let stageIndex = 0; stageIndex < stageCount; stageIndex += 1) {
       const duration = Math.max(stages[stageIndex]?.duration ?? 0, 0.1);
-      const assemblyStart = Math.max(arrivalAtStage, stationFreeAt[stageIndex] ?? 0);
+      const isFinalStage = stageIndex === finalStageIndex;
+      const stationAvailableAt = isFinalStage
+        ? finalEarliest
+        : stationFreeAt[stageIndex] ?? 0;
+      const assemblyStart = Math.max(arrivalAtStage, stationAvailableAt);
       const assemblyEnd = assemblyStart + duration;
-      const hasNextStage = stageIndex < stageCount - 1;
-      const waitEnd = hasNextStage
-        ? Math.max(assemblyEnd, stationFreeAt[stageIndex + 1] ?? 0)
-        : assemblyEnd + COMPLETED_DISPLAY_SECONDS;
+      const hasNextStage = stageIndex < finalStageIndex;
+
+      if (!hasNextStage) {
+        segments.push({
+          type: 'stage',
+          resource: `station:${stageIndex}`,
+          stageIndex,
+          start: assemblyStart,
+          assemblyEnd,
+          end: assemblyEnd,
+          duration,
+        });
+        finishTime = assemblyEnd;
+        break;
+      }
+
+      const travelDuration = travelDurations[stageIndex] ?? MIN_TRAVEL_SECONDS;
+      const approachesFinalStage = stageIndex + 1 === finalStageIndex;
+      const destinationDepartureGate = approachesFinalStage
+        // Dojazd do finalu zaczyna sie dopiero po zwolnieniu stanowiska przez
+        // poprzedni produkt albo po zakonczeniu podnoszenia sparowanego lidera.
+        ? finalEarliest
+        // Na zwyklej stacji rowniez nie wjezdzamy w strefe dojazdowa, dopoki
+        // poprzednia polowa nie odsunie sie o pelna bezpieczna odleglosc.
+        : stationFreeAt[stageIndex + 1] ?? 0;
+      const travelStart = Math.max(
+        assemblyEnd,
+        segmentFreeAt[stageIndex] ?? 0,
+        destinationDepartureGate,
+      );
+      const travelEnd = travelStart + travelDuration;
 
       segments.push({
         type: 'stage',
+        resource: `station:${stageIndex}`,
         stageIndex,
         start: assemblyStart,
         assemblyEnd,
-        end: waitEnd,
+        end: travelStart,
         duration,
       });
+      segments.push({
+        type: 'travel',
+        resource: `segment:${stageIndex}`,
+        from: stageIndex,
+        to: stageIndex + 1,
+        start: travelStart,
+        end: travelEnd,
+        duration: travelDuration,
+      });
 
-      if (hasNextStage) {
-        const travelDuration = travelDurations[stageIndex] ?? MIN_TRAVEL_SECONDS;
-        const travelStart = waitEnd;
-        const travelEnd = travelStart + travelDuration;
-
-        segments.push({
-          type: 'travel',
-          from: stageIndex,
-          to: stageIndex + 1,
-          start: travelStart,
-          end: travelEnd,
-          duration: travelDuration,
-        });
-
-        // #4: stacja pozostaje zajeta jeszcze przez halfDelaySeconds PO przejezdzie
-        // czola - bo wtedy przejezdza OGON (druga polowa). Dzieki temu nastepny
-        // paczkomat czeka stacje dalej i nie wjezdza w czekajacy ogon na etapie 3.
-        stationFreeAt[stageIndex] = travelStart + (TUNE.halfDelaySeconds ?? 0);
-        arrivalAtStage = travelEnd;
-        finishTime = travelEnd;
-      } else {
-        stationFreeAt[stageIndex] = waitEnd + (TUNE.halfDelaySeconds ?? 0);
-        finishTime = waitEnd;
-      }
+      // Stacja jest wolna dopiero, gdy srodek wyjezdzajacej polowy oddali sie o
+      // jej pelna dlugosc + margines. Zapobiega zetknieciu na granicy stacji.
+      stationFreeAt[stageIndex] = travelStart + getClearanceDuration(travelDuration);
+      segmentFreeAt[stageIndex] = travelEnd;
+      arrivalAtStage = travelEnd;
+      finishTime = travelEnd;
     }
 
-    units.push({
-      number: unitIndex + 1,
-      startTime: segments[0]?.start ?? 0,
+    return {
+      number,
+      role,
+      key: `${number}`,
+      startTime: segments[0]?.start ?? desiredStart,
       finishTime,
       segments,
+    };
+  };
+
+  let desiredLeadStart = 0;
+  for (let unitIndex = 0; unitIndex < unitCount; unitIndex += 1) {
+    const number = unitIndex + 1;
+    const lead = scheduleHalf({
+      number,
+      role: 'lead',
+      desiredStart: desiredLeadStart,
+      finalEarliest: finalStationFreeAt,
     });
+    const leadFinal = lead.segments.find(
+      (segment) => segment.type === 'stage' && segment.stageIndex === finalStageIndex,
+    );
+    const trail = scheduleHalf({
+      number,
+      role: 'trail',
+      desiredStart: lead.startTime + pairHeadway,
+      // Ogon moze wjechac na final dopiero, gdy lider zakonczyl podnoszenie.
+      // partTrailBuffer jest odlegloscia bufora przeliczana na czas dojazdu.
+      finalEarliest: Math.max(
+        finalStationFreeAt,
+        (leadFinal?.assemblyEnd ?? 0) + finalBufferDelay,
+      ),
+    });
+    const trailFinal = trail.segments.find(
+      (segment) => segment.type === 'stage' && segment.stageIndex === finalStageIndex,
+    );
+    const pairFinish = Math.max(
+      leadFinal?.assemblyEnd ?? lead.finishTime,
+      trailFinal?.assemblyEnd ?? trail.finishTime,
+    ) + COMPLETED_DISPLAY_SECONDS;
+
+    // Lider czeka na podstawie na druga polowe. Obie czesci znikaja dopiero po
+    // wspolnym czasie prezentacji gotowego paczkomatu.
+    if (leadFinal) leadFinal.end = pairFinish;
+    if (trailFinal) trailFinal.end = pairFinish;
+    lead.finishTime = pairFinish;
+    trail.finishTime = pairFinish;
+    finalStationFreeAt = pairFinish;
+    stationFreeAt[finalStageIndex] = pairFinish;
+
+    leadUnits.push(lead);
+    trailUnits.push(trail);
+    desiredLeadStart = trail.startTime + productHeadway;
   }
 
-  const firstStarts = units.map((unit) => unit.startTime);
+  const firstStarts = leadUnits.map((unit) => unit.startTime);
   const averageLaunchInterval =
     firstStarts.length > 1
       ? (firstStarts[firstStarts.length - 1] - firstStarts[0]) / (firstStarts.length - 1)
@@ -428,18 +566,73 @@ const buildProductionSchedule = (stages, count, travelTimes = []) => {
     + COMPLETED_DISPLAY_SECONDS;
 
   return {
-    units,
-    totalTime: Math.max(units[units.length - 1]?.finishTime ?? soloCycleTime, 0.1),
+    // `units` pozostaje aliasem liderow dla istniejacych metryk/UI.
+    units: leadUnits,
+    leadUnits,
+    trailUnits,
+    totalTime: Math.max(leadUnits[leadUnits.length - 1]?.finishTime ?? soloCycleTime, 0.1),
     launchInterval: Math.max(averageLaunchInterval, 0.1),
     soloCycleTime: Math.max(soloCycleTime, 0.1),
     travelDurations,
+    pairHeadway,
+    finalStageIndex,
+    partMinimumGap,
   };
 };
 
-const getVisibleUnitsFromSchedule = (schedule, elapsed, stageCount) => {
-  const visible = [];
+const validateScheduleReservations = (schedule) => {
+  const reservations = [];
+  const carriers = [
+    ...(schedule.leadUnits ?? []),
+    ...(schedule.trailUnits ?? []),
+  ];
 
-  schedule.units.forEach((scheduledUnit) => {
+  carriers.forEach((carrier) => {
+    carrier.segments.forEach((segment) => {
+      if (!segment.resource || segment.end <= segment.start) return;
+      reservations.push({
+        resource: segment.resource,
+        start: segment.start,
+        end: segment.end,
+        number: carrier.number,
+        role: carrier.role,
+      });
+    });
+  });
+
+  const conflicts = [];
+  for (let index = 0; index < reservations.length; index += 1) {
+    const current = reservations[index];
+    for (let otherIndex = index + 1; otherIndex < reservations.length; otherIndex += 1) {
+      const other = reservations[otherIndex];
+      if (current.resource !== other.resource) continue;
+      const overlap = Math.min(current.end, other.end) - Math.max(current.start, other.start);
+      if (overlap <= 0.0001) continue;
+
+      const isPairedFinalJoin = current.resource === `station:${schedule.finalStageIndex}`
+        && current.number === other.number
+        && current.role !== other.role;
+      if (isPairedFinalJoin) continue;
+
+      conflicts.push({
+        resource: current.resource,
+        first: `${current.number}:${current.role}`,
+        second: `${other.number}:${other.role}`,
+        overlap,
+      });
+    }
+  }
+
+  return conflicts;
+};
+
+const getVisibleUnitsFromSchedule = (schedule, elapsed, stageCount, lane = 'lead') => {
+  const visible = [];
+  const scheduledUnits = lane === 'trail'
+    ? schedule.trailUnits ?? []
+    : schedule.leadUnits ?? schedule.units ?? [];
+
+  scheduledUnits.forEach((scheduledUnit) => {
     if (elapsed < scheduledUnit.startTime || elapsed > scheduledUnit.finishTime) return;
 
     const segment = scheduledUnit.segments.find(
@@ -452,6 +645,7 @@ const getVisibleUnitsFromSchedule = (schedule, elapsed, stageCount) => {
       visible.push({
         key: `${scheduledUnit.number}`,
         number: scheduledUnit.number,
+        role: scheduledUnit.role ?? lane,
         elapsed,
         currentIndex: 0,
         progress: 0,
@@ -467,6 +661,7 @@ const getVisibleUnitsFromSchedule = (schedule, elapsed, stageCount) => {
       visible.push({
         key: `${scheduledUnit.number}`,
         number: scheduledUnit.number,
+        role: scheduledUnit.role ?? lane,
         elapsed,
         currentIndex: segment.from,
         progress: 100,
@@ -495,6 +690,7 @@ const getVisibleUnitsFromSchedule = (schedule, elapsed, stageCount) => {
     visible.push({
       key: `${scheduledUnit.number}`,
       number: scheduledUnit.number,
+      role: scheduledUnit.role ?? lane,
       elapsed,
       currentIndex: segment.stageIndex,
       progress: assemblyProgress,
@@ -2146,7 +2342,14 @@ function updateTwoPartLockerModel(group, leadUnit, trailUnit, time, stages, half
   // sam paczkomat sprzed halfDelaySeconds). Brak sztucznej kompresji/przesuniec
   // - separacje daje pozycja obu modeli na tasmie.
   const fractionsForUnit = (u) => {
-    if (!u) return { locks: 0, structure: 0, lockers: 0, finalize: 0, entry: false };
+    if (!u) return {
+      trough: 0,
+      locks: 0,
+      structure: 0,
+      lockers: 0,
+      finalize: 0,
+      entry: false,
+    };
     const prog = THREE.MathUtils.clamp((u.assemblyProgress ?? u.progress ?? 0) / 100, 0, 1);
     const t = u.mode === 'entry' ? 0 : u.currentIndex + prog;
     const finalizeCompleted = finalizeIndex >= 0 && u.currentIndex > finalizeIndex;
@@ -2156,7 +2359,9 @@ function updateTwoPartLockerModel(group, leadUnit, trailUnit, time, stages, half
       return THREE.MathUtils.clamp(t - idx, 0, 1);
     };
     return {
-      locks: u.mode === 'entry' ? 0.12 : at('locks'),
+      // Koryto jest nosnikiem od samego wejscia na linie (Etap 0).
+      trough: u.mode === 'entry' ? 1 : at('trough'),
+      locks: at('locks'),
       structure: at('shelves'),
       lockers: at('lockers'),
       finalize: finalizeCompleted ? 1 : at('finalize'),
@@ -2174,8 +2379,8 @@ function updateTwoPartLockerModel(group, leadUnit, trailUnit, time, stages, half
 
   parts.troughParts.forEach((part, index) => {
     const fr = modFr(index);
-    const trayProgress = smooth(fr.locks / 0.12);
-    setPartOpacity(part, trayProgress * (1 - smooth(fr.lockers)));
+    const trayProgress = smooth(fr.trough);
+    setPartOpacity(part, trayProgress);
     part.scale.z = 0.72 + trayProgress * 0.28;
   });
   parts.lockRails.forEach((rail, index) => {
@@ -2356,14 +2561,19 @@ function updateTwoPartLockerModel(group, leadUnit, trailUnit, time, stages, half
   }
 }
 
-function ThreeProductionScene({ stages, visibleUnits, trailUnits }) {
+function ThreeProductionScene({
+  stages,
+  visibleUnits,
+  trailUnits,
+  scheduleConflictCount = 0,
+  onAssemblyMetrics,
+}) {
   const mountRef = useRef(null);
   const controlsRef = useRef(null);
-  const latestRef = useRef({ stages, visibleUnits, trailUnits });
-  const [cadModelStatus, setCadModelStatus] = useState('loading');
+  const latestRef = useRef({ stages, visibleUnits, trailUnits, scheduleConflictCount });
   const [stageOneModelStatus, setStageOneModelStatus] = useState('loading');
 
-  latestRef.current = { stages, visibleUnits, trailUnits };
+  latestRef.current = { stages, visibleUnits, trailUnits, scheduleConflictCount };
 
   const zoomCamera = (factor) => {
     const controls = controlsRef.current;
@@ -2463,10 +2673,8 @@ function ThreeProductionScene({ stages, visibleUnits, trailUnits }) {
 
     const lockers = new Map();
     const trailLockers = new Map(); // #4: druga (opozniona) polowa kazdego paczkomatu
-    const cadLockers = new Map();
     const rollers = [];
     const stationWorkers = [];
-    let cadModelTemplate = null;
     let stageOneTemplates = null;
     let disposed = false;
     let lastStageSignature = '';
@@ -2975,6 +3183,22 @@ function ThreeProductionScene({ stages, visibleUnits, trailUnits }) {
         standingOffsetY,
         sharedScale,
       };
+      const measurementModel = createTwoPartLockerModel(stageOneTemplates);
+      measurementModel.scale.setScalar(MODEL_RENDER_SCALE);
+      measurementModel.updateMatrixWorld(true);
+      const measuredPartLength = Math.max(
+        ...measurementModel.userData.parts.moduleRoots.map((root) => (
+          new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3()).z
+        )),
+      );
+      if (Number.isFinite(measuredPartLength) && measuredPartLength > 0) {
+        onAssemblyMetrics?.({ partLength: measuredPartLength });
+      }
+      measurementModel.traverse((object) => {
+        if (!object.isMesh || !object.material) return;
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach((material) => material.dispose());
+      });
       lockers.forEach((model) => unitGroup.remove(model));
       lockers.clear();
       trailLockers.forEach((model) => unitGroup.remove(model));
@@ -3025,45 +3249,6 @@ function ThreeProductionScene({ stages, visibleUnits, trailUnits }) {
       if (!disposed) setStageOneModelStatus('error');
     });
 
-    gltfLoader.load(
-      CAD_MODEL_URL,
-      (gltf) => {
-        if (disposed) return;
-
-        const source = gltf.scene;
-        source.rotation.x = -Math.PI / 2;
-        source.updateMatrixWorld(true);
-
-        const initialBounds = new THREE.Box3().setFromObject(source);
-        const initialSize = initialBounds.getSize(new THREE.Vector3());
-        const scale = CAD_MODEL_HEIGHT / Math.max(initialSize.y, 0.001);
-        source.scale.multiplyScalar(scale);
-        source.updateMatrixWorld(true);
-
-        const normalizedBounds = new THREE.Box3().setFromObject(source);
-        const normalizedCenter = normalizedBounds.getCenter(new THREE.Vector3());
-        source.position.x -= normalizedCenter.x;
-        source.position.y -= normalizedBounds.min.y;
-        source.position.z -= normalizedCenter.z;
-        source.updateMatrixWorld(true);
-        source.traverse((object) => {
-          if (!object.isMesh) return;
-          object.castShadow = true;
-          object.receiveShadow = true;
-        });
-
-        cadModelTemplate = new THREE.Group();
-        cadModelTemplate.name = 'cadLockerTemplate';
-        cadModelTemplate.add(source);
-        setCadModelStatus('ready');
-      },
-      undefined,
-      (error) => {
-        console.error('Nie udalo sie zaladowac modelu CAD paczkomatu.', error);
-        if (!disposed) setCadModelStatus('error');
-      },
-    );
-
     let frame;
     const clock = new THREE.Clock();
 
@@ -3097,7 +3282,7 @@ function ThreeProductionScene({ stages, visibleUnits, trailUnits }) {
           ? MODEL_LINE_Y + conveyorLift
           : MODEL_LINE_Y + conveyorLift + Math.sin(time * 2 + poseUnit.number) * 0.018;
         model.rotation.y += Math.atan2(Math.sin(pose.angle - model.rotation.y), Math.cos(pose.angle - model.rotation.y)) * 0.16;
-        model.scale.setScalar(0.88);
+        model.scale.setScalar(MODEL_RENDER_SCALE);
         updateTwoPartLockerModel(model, leadUnit, trailUnit, time, stagesNow, halfMode);
       };
 
@@ -3114,8 +3299,7 @@ function ThreeProductionScene({ stages, visibleUnits, trailUnits }) {
         }
         placeHalf(leadModel, unit, unit, trailUnit, 'lead');
 
-        // OGON (modul 1) na pozycji TEJ SAMEJ jednostki sprzed halfDelaySeconds
-        // - czyli na prawdziwej, wczesniejszej stacji. Osobny obiekt.
+        // OGON (modul 1) ma osobny harmonogram i osobne rezerwacje zasobow.
         if (trailUnit) {
           activeTrail.add(unit.key);
           let trailModel = trailLockers.get(unit.key);
@@ -3126,9 +3310,6 @@ function ThreeProductionScene({ stages, visibleUnits, trailUnits }) {
           }
           placeHalf(trailModel, trailUnit, unit, trailUnit, 'trail');
         }
-
-        const cadModel = cadLockers.get(unit.key);
-        if (cadModel) cadModel.visible = false;
       });
 
       lockers.forEach((model, number) => {
@@ -3137,14 +3318,8 @@ function ThreeProductionScene({ stages, visibleUnits, trailUnits }) {
       trailLockers.forEach((model, number) => {
         if (!activeTrail.has(number)) model.visible = false;
       });
-      cadLockers.forEach((model, number) => {
-        if (!activeNumbers.has(number)) {
-          model.visible = false;
-        }
-      });
-      renderer.domElement.dataset.cadInstances = String(cadLockers.size);
-      renderer.domElement.dataset.cadVisible = String(
-        [...cadLockers.values()].filter((model) => model.visible).length,
+      renderer.domElement.dataset.scheduleConflicts = String(
+        latestRef.current.scheduleConflictCount ?? 0,
       );
       renderer.domElement.dataset.stageOneGlb = stageOneTemplates ? 'ready' : 'loading';
       renderer.domElement.dataset.stageOneGlbUnits = String(
@@ -3288,14 +3463,13 @@ function ThreeProductionScene({ stages, visibleUnits, trailUnits }) {
         </button>
       </div>
       <div
-        className={`cad-model-status ${cadModelStatus === 'error' || stageOneModelStatus === 'error' ? 'error' : cadModelStatus === 'ready' && stageOneModelStatus === 'ready' ? 'ready' : 'loading'}`}
-        data-cad-model-status={cadModelStatus}
+        className={`cad-model-status ${stageOneModelStatus}`}
         data-stage-one-model-status={stageOneModelStatus}
       >
         <span />
-        {cadModelStatus === 'error' || stageOneModelStatus === 'error'
+        {stageOneModelStatus === 'error'
           ? 'Model GLB niedostepny'
-          : cadModelStatus === 'ready' && stageOneModelStatus === 'ready'
+          : stageOneModelStatus === 'ready'
             ? 'Modele GLB aktywne'
             : 'Ladowanie modeli GLB'}
       </div>
@@ -3304,7 +3478,15 @@ function ThreeProductionScene({ stages, visibleUnits, trailUnits }) {
   );
 }
 
-function ProductionLine({ stages, visibleUnits, trailUnits, conveyorDuration, productionFinished }) {
+function ProductionLine({
+  stages,
+  visibleUnits,
+  trailUnits,
+  conveyorDuration,
+  productionFinished,
+  scheduleConflictCount,
+  onAssemblyMetrics,
+}) {
   const leadUnit = visibleUnits[0] ?? {
     currentIndex: productionFinished ? Math.max(stages.length - 1, 0) : 0,
     progress: productionFinished ? 100 : 0,
@@ -3386,7 +3568,13 @@ function ProductionLine({ stages, visibleUnits, trailUnits, conveyorDuration, pr
         </div>
 
         <div className="factory-floor scene-layout">
-          <ThreeProductionScene stages={stages} visibleUnits={visibleUnits} trailUnits={trailUnits} />
+          <ThreeProductionScene
+            stages={stages}
+            visibleUnits={visibleUnits}
+            trailUnits={trailUnits}
+            scheduleConflictCount={scheduleConflictCount}
+            onAssemblyMetrics={onAssemblyMetrics}
+          />
         </div>
 
         <div className="process-readout">
@@ -3434,6 +3622,9 @@ function App() {
   const [travelTimes, setTravelTimes] = useState(() => getDefaultTravelTimes(baseStages.length));
   const [stopwatchRunning, setStopwatchRunning] = useState(false);
   const [stopwatchElapsed, setStopwatchElapsed] = useState(0);
+  const [measuredPartLength, setMeasuredPartLength] = useState(
+    ASSEMBLY_LENGTH * MODEL_RENDER_SCALE,
+  );
   const stopwatchStartRef = useRef(0);
   const stopwatchBaseRef = useRef(0);
 
@@ -3451,10 +3642,19 @@ function App() {
     () => normalizeTravelTimes(travelTimes, normalizedStages.length),
     [normalizedStages.length, travelTimes],
   );
-  const productionSchedule = useMemo(
-    () => buildProductionSchedule(normalizedStages, productionCount, normalizedTravelTimes),
-    [normalizedStages, normalizedTravelTimes, productionCount],
-  );
+  const productionSchedule = useMemo(() => {
+    const schedule = buildProductionSchedule(
+      normalizedStages,
+      productionCount,
+      normalizedTravelTimes,
+      measuredPartLength,
+    );
+    schedule.reservationConflicts = validateScheduleReservations(schedule);
+    if (schedule.reservationConflicts.length > 0) {
+      console.error('Wykryto konflikt rezerwacji harmonogramu.', schedule.reservationConflicts);
+    }
+    return schedule;
+  }, [measuredPartLength, normalizedStages, normalizedTravelTimes, productionCount]);
   const cycleTime = productionSchedule.soloCycleTime;
   const launchInterval = productionSchedule.launchInterval;
   const totalTime = productionSchedule.totalTime;
@@ -3504,12 +3704,14 @@ function App() {
     () => getVisibleUnitsFromSchedule(productionSchedule, elapsed, normalizedStages.length),
     [elapsed, normalizedStages.length, productionSchedule],
   );
-  // #4 PRZEBUDOWA: druga polowa = stan paczkomatu sprzed halfDelaySeconds.
+  // Druga polowa ma wlasny harmonogram i wlasne rezerwacje zasobow. Nie jest
+  // juz stanem lidera sprzed kilku sekund, wiec nie dogania go podczas postoju.
   const trailUnits = useMemo(
     () => getVisibleUnitsFromSchedule(
       productionSchedule,
-      Math.max(elapsed - (TUNE.halfDelaySeconds ?? 0), 0),
+      elapsed,
       normalizedStages.length,
+      'trail',
     ),
     [elapsed, normalizedStages.length, productionSchedule],
   );
@@ -3565,6 +3767,13 @@ function App() {
     setTravelTimes(getDefaultTravelTimes(baseStages.length));
   };
 
+  const handleAssemblyMetrics = React.useCallback(({ partLength }) => {
+    if (!Number.isFinite(partLength) || partLength <= 0) return;
+    setMeasuredPartLength((current) => (
+      Math.abs(current - partLength) > 0.001 ? partLength : current
+    ));
+  }, []);
+
   return (
     <main className="app-shell">
       <Metrics
@@ -3589,6 +3798,8 @@ function App() {
         trailUnits={trailUnits}
         conveyorDuration={animationCycle}
         productionFinished={elapsed >= animationCycle}
+        scheduleConflictCount={productionSchedule.reservationConflicts.length}
+        onAssemblyMetrics={handleAssemblyMetrics}
       />
       <StageEditor
         stages={stages}
