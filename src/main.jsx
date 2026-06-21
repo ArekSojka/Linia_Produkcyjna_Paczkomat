@@ -3,7 +3,10 @@ import { createRoot } from 'react-dom/client';
 import { motion } from 'framer-motion';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import {
   Activity,
   Box,
@@ -31,28 +34,28 @@ const baseStages = [
   {
     id: crypto.randomUUID(),
     name: '2 koryta i 22 zamki',
-    duration: 24,
+    duration: 2,
     color: '#2563eb',
     icon: 'locks',
   },
   {
     id: crypto.randomUUID(),
     name: 'Sciany boczne i polki',
-    duration: 24,
+    duration: 2,
     color: '#0891b2',
     icon: 'shelves',
   },
   {
     id: crypto.randomUUID(),
     name: '22 skrytki',
-    duration: 22,
+    duration: 2,
     color: '#16a34a',
     icon: 'lockers',
   },
   {
     id: crypto.randomUUID(),
     name: 'Polaczenie, plecy i dachy',
-    duration: 28,
+    duration: 2,
     color: '#7c3aed',
     icon: 'finalize',
   },
@@ -108,17 +111,145 @@ const STATION_SIDE_DISTANCE = CONVEYOR_WIDTH / 2 + 1.25;
 const ROLLER_COLOR = '#e2e8f0';
 const CONVEYOR_UNITS_PER_SECOND = 1.42;
 const MIN_TRAVEL_SECONDS = 3.2;
-const ENTRY_TRAVEL_SECONDS = 4;
+const ENTRY_TRAVEL_SECONDS = 2;
 const ENTRY_CONVEYOR_LENGTH = 5.8;
 const COMPLETED_DISPLAY_SECONDS = 5;
-const LOCKS_PER_MODULE = 11;
+// === JEDNO zrodlo prawdy dla liczby skrytek na polowe paczkomatu ===
+// Zakres docelowy 10 / 11 / 12. Ta liczba musi sie zgadzac z modelem
+// polek + drzwi (polkiorazdrzwi.glb). Zmiana tylko tej jednej wartosci
+// automatycznie skaluje zamki, polki i skrytki - zawsze w relacji 1:1:1.
+const CELLS_PER_HALF = 11;
+const LOCKS_PER_MODULE = CELLS_PER_HALF;
 const MODULE_COUNT = 2;
 const LOCK_COUNT = LOCKS_PER_MODULE * MODULE_COUNT;
 const LOCKER_COUNT = LOCK_COUNT;
 const SHELF_COUNT = LOCKS_PER_MODULE;
+
+// =====================================================================
+// === STROJENIE NA ZYWO (Vite HMR) ===================================
+// Zmien ktorakolwiek z tych liczb i ZAPISZ - Vite przeladuje scene od
+// reki, bez nagrywania. Tu sa wszystkie pozycje, ktore dotad strzelalem
+// na slepo. Ustaw je u siebie patrzac na render.
+// ---------------------------------------------------------------------
+const TUNE = {
+  // DROBNA korekta X zamkow [modul 0, modul 1]. Zamki sa AUTOMATYCZNIE stawiane
+  // na zmierzonej pozycji WIEKSZEGO koryta kazdej polowy - ta wartosc to tylko
+  // ewentualny nudge (np. zeby zamki wystawaly z powierzchni). 0 = na korycie.
+  lockX: [0, 0],
+  // Wysokosc dachu liczona od szczytu kolumny. Zwieksz = wyzej (gdy wnika),
+  // zmniejsz = nizej (gdy lewituje).
+  roofYOffset: -0.08,
+  // Wysokosc daszka - ma byc lekko POD dachem (czyli mniej niz roofYOffset).
+  canopyYOffset: -0.16,
+  // PELNY obrot dachu/daszka [rotX, rotY, rotZ] w radianach. Model ma juz
+  // gotowy skos - rotY = Math.PI obraca go na wlasciwa strone (okap na przod).
+  // Gdyby skos byl po zlej stronie, daj rotY: 0. Obrot robiony w miejscu.
+  roofRot: [Math.PI / 2, Math.PI, 0],
+  canopyRot: [Math.PI / 2, Math.PI, 0],
+  // PRZESUNIECIE dachu/daszka [x, y, z]. Obrot tylko obraca w miejscu - TYM
+  // przesuwasz je nad drzwi (zielona strefa na zdjeciu). z = przod/tyl (nad
+  // skrytki), x = lewo/prawo, y = gora/dol (dodatkowo do roof/canopyYOffset).
+  roofOffset: [0, 0, 0.16],
+  // Daszek domyslnie wysuniety na PRZEDNIA krawedz (z=0.7), zeby nie chowal sie
+  // pod dachem. Gdyby trafil na tyl - zmien z na ujemne (np. -0.7).
+  canopyOffset: [0, 0.1, 0.9],
+  // Docelowa wysokosc (Y) sciany tylniej. Ujemne = nizej (na DOLE / z TYLU).
+  // Sciana jest automatycznie sprowadzana w dol na ta wysokosc i wjezdza od dolu.
+  backWallY: -0.8,
+  // O ile gleboko pod spodem startuje sciana tylnia (montaz "od dolu").
+  backWallDrop: 2.2,
+  // Obrot sciany tylniej (radiany) - byla "do gory nogami", wiec domyslnie PI
+  // (180 stopni). Gdyby trzeba bylo innej osi, daj znac.
+  backWallRotX: Math.PI,
+  // === Ostatni etap (stawianie pionowe) ===
+  // Odstep X miedzy dwiema polowkami. DODATNIE = rozsuwa, UJEMNE = scala je
+  // razem. Daj ujemne, gdy w srodku jest szpara / sciany sie rozjezdzaja.
+  halfGapX: 0,
+  // Pionowe dociagniecie stojacych kolumn (ujemne = nizej, gdy lewituja).
+  columnSettleY: 0,
+  // Wysokosc CALEGO stojacego paczkomatu (podstawa + kolumny) wzgledem linii.
+  // Ujemne opuszcza go, zeby PODSTAWA siadla na tasmociagu, a nie lewitowala.
+  standingY: -0.4,
+  // Obrot CALEJ czesci wokol dlugiej osi (radiany). Math.PI = czesc staje
+  // prawidlowo (nie do gory nogami). Daj 0, gdyby przegielo w druga strone.
+  partsRotY: Math.PI,
+  // === POLKI (GLB polka.glb) ===
+  shelfScale: 1,            // skala polki (gdy za duza/mala)
+  shelfRotX: 0,   // obrot polki, by lezala plasko w poprzek kolumny
+  shelfOffset: [0, 0, 0],   // drobne przesuniecie polki [x, y, z]
+  // === DRZWI (GLB - 4 rozmiary) ===
+  doorType: 'l',            // ktory rozmiar: 'xl' | 'l' | 's' | 'xs'
+  doorScale: 0.95,             // skala drzwi
+  doorRotX: Math.PI,         // 180° = do góry nogami              // obrot drzwi wokol X (gdy zle ustawione)
+  doorRotY: 0,              // obrot drzwi wokol Y
+  doorOffset: [0, 0.27, 0.2],    // drobne przesuniecie drzwi [x, y, z]
+  // Szary odstep miedzy skrytkami (grubosc paska), zeby drzwi nie zlewaly sie
+  // w jeden bialy prostokat. 0 = brak. Zwieksz, jesli ma byc wyrazniejszy.
+  cellGap: 0.03,
+  // Szerokosc separatora (X). Zmniejsz, gdy wystaje poza sciane boczna.
+  cellGapWidth: 0.98,
+  // Przesuniecie szarego separatora skrytek [x, y, z] - gdy wypada za wysoko/
+  // za nisko albo nie na granicy drzwiczek.
+  cellGapOffset: [0, -0.054, 0],
+  // === SIATKA SKRYTEK (drzwi + polki) ===
+  // Poczatek (Z) pierwszego rzedu skrytek i odstep miedzy rzedami. Zwieksz
+  // odstep / przesun start, gdy skrytki nie wypelniaja kolumny (szpara u gory).
+  cellRowStart: -2,
+  cellRowSpacing: 0.4,
+  // === SCIANY BOCZNE ===
+  // Obrot POJEDYNCZEJ sciany [rotX, rotY, rotZ] w radianach. Klucz "modul-faza"
+  // ('0-first' = lewa sciana modulu 0, '0-second' = prawa, itd.). Domyslnie
+  // wszystkie 0. Ustaw tej zle obroconej np. rotZ: Math.PI (profil) albo
+  // rotX: Math.PI. Obrot jest robiony W MIEJSCU (z korekta pozycji).
+  wallRot: {
+    '0-first': [Math.PI, 0, Math.PI],
+    '0-second': [0, 0, 0],
+    '1-first': [0, 0, 0],
+    '1-second': [0, 0, 0],
+  },
+  // Dosuniecie POJEDYNCZEJ sciany [x, y, z], gdy po obroceniu nie przylega.
+  // Klucz "modul-faza" (jak wallRot). x = lewo/prawo, z = wzdluz, y = gora/dol.
+  wallOffset: {
+    '0-first': [0.08, 0, 0],
+    '0-second': [0, 0, 0],
+    '1-first': [0, 0, 0],
+    '1-second': [0, 0, 0],
+  },
+};
+// =====================================================================
 const ASSEMBLY_LENGTH = 4.8;
 const ASSEMBLY_HALF_LENGTH = ASSEMBLY_LENGTH / 2;
 const ASSEMBLY_ITEM_SPACING = 0.4;
+// Model finalnego, gotowego produktu - uzywany w momencie "scalenia" animacji.
+// Wskazuje na model optymalny (paczkomatopytmalny.glb skopiowany do /models).
+const CAD_MODEL_URL = '/models/paczkomat-optimal.glb';
+const LOCK_TROUGH_MODEL_URL = '/models/components/lock-trough.glb';
+const CENTER_TROUGH_MODEL_URL = '/models/components/trough-center.glb';
+const SMALL_TROUGH_LEFT_MODEL_URL = '/models/components/small-trough-left.glb';
+const SMALL_TROUGH_RIGHT_MODEL_URL = '/models/components/small-trough-right.glb';
+const LOCK_MODEL_URL = '/models/components/lock.glb';
+const SIDE_WALL_LEFT_MODEL_URL = '/models/components/side-wall-left.glb';
+const SIDE_WALL_CENTER_MODEL_URL = '/models/components/side-wall-center.glb';
+const SIDE_WALL_RIGHT_MODEL_URL = '/models/components/side-wall-right.glb';
+const BACK_LEFT_MODEL_URL = '/models/components/back-left.glb';
+const BACK_RIGHT_MODEL_URL = '/models/components/back-right.glb';
+const ROOF_MODEL_URL = '/models/components/roof.glb';
+const CANOPY_MODEL_URL = '/models/components/canopy.glb';
+const BASE_MODEL_URL = '/models/components/base.glb';
+// Polki + drzwi. Obecny eksport z Blendera (polkiorazdrzwi.glb) jest PUSTY,
+// dlatego dopoki tu nie pojawi sie dzialajacy plik z geometria, etap polek i
+// drzwi korzysta z proceduralnych zaslepek. Aby uzyc prawdziwego modelu:
+// wrzuc dzialajacy plik jako /models/components/shelves-doors.glb - reszta
+// kodu wykryje go automatycznie i podmieni zaslepki.
+const SHELVES_DOORS_MODEL_URL = '/models/components/shelves-doors.glb';
+// Polka oraz 4 rozmiary drzwi (duze/srednie/male/bardzo male) z elementy/.
+const SHELF_MODEL_URL = '/models/components/shelf.glb';
+const DOOR_XL_MODEL_URL = '/models/components/door-xl.glb';
+const DOOR_L_MODEL_URL = '/models/components/door-l.glb';
+const DOOR_S_MODEL_URL = '/models/components/door-s.glb';
+const DOOR_XS_MODEL_URL = '/models/components/door-xs.glb';
+const CAD_MODEL_HEIGHT = 3.45;
+const CONVEYOR_SURFACE_Y = CONVEYOR_ELEVATION + 0.55;
 
 const buildLinePoints = (count) => {
   const spacing = 7.6;
@@ -165,8 +296,10 @@ const getTravelDurations = (stageCount) => {
   });
 };
 
+// Domyslny czas dojazdu miedzy etapami = 2 s (mozna zmienic w UI / Tasmociag).
+const DEFAULT_TRAVEL_SECONDS = 2;
 const getDefaultTravelTimes = (stageCount) =>
-  getTravelDurations(stageCount).map((duration) => Number(duration.toFixed(1)));
+  getTravelDurations(stageCount).map(() => DEFAULT_TRAVEL_SECONDS);
 
 const normalizeTravelTimes = (travelTimes, stageCount) => {
   const defaults = getDefaultTravelTimes(stageCount);
@@ -687,6 +820,46 @@ function makeMaterial(color, roughness = 0.62, metalness = 0.08) {
   return new THREE.MeshStandardMaterial({ color, roughness, metalness });
 }
 
+// === Profesjonalna paleta materialow (stonowane stalowo-szare) ===
+// Nadpisuje plaski material CAD (STEP_cccccc, jednolita szarosc) na czesciach
+// GLB, zeby calosc wygladala na render inzynierski gotowy dla zarzadu.
+const PALETTE = {
+  trough: { color: '#aeb7c0', metalness: 0.82, roughness: 0.42 }, // ocynkowana stal koryt
+  lock: { color: '#828b96', metalness: 0.9, roughness: 0.34 }, // zamki - ciemniejsza stal
+  sideWall: { color: '#3c424a', metalness: 0.55, roughness: 0.5 }, // antracytowe sciany
+  backWall: { color: '#31363d', metalness: 0.5, roughness: 0.55 },
+  base: { color: '#24282d', metalness: 0.62, roughness: 0.48 }, // grafitowa podstawa
+  roof: { color: '#363c44', metalness: 0.55, roughness: 0.5 },
+  canopy: { color: '#9aa3ac', metalness: 0.7, roughness: 0.42 }, // jasniejszy daszek
+  shelf: { color: '#c2cad2', metalness: 0.45, roughness: 0.5 }, // jasne polki
+  door: { color: '#d9dee3', metalness: 0.25, roughness: 0.55 }, // jasne drzwi
+  cellEdge: { color: '#454c55', metalness: 0.5, roughness: 0.5 },
+};
+const ACCENT_COLOR = '#7fa8c9'; // subtelny, chlodny akcent aktywnego etapu
+
+function makePalette(key) {
+  const spec = PALETTE[key] ?? PALETTE.trough;
+  return new THREE.MeshStandardMaterial({
+    color: spec.color,
+    metalness: spec.metalness,
+    roughness: spec.roughness,
+    envMapIntensity: 1.05,
+  });
+}
+
+// Zamienia material na czesci GLB na ten z palety (kazda siatka dostaje wlasny
+// klon, dzieki czemu animacje emisji per-czesc dalej dzialaja).
+function applyGlbMaterial(object, key) {
+  const material = makePalette(key);
+  object.traverse((child) => {
+    if (!child.isMesh) return;
+    child.material = material.clone();
+    child.castShadow = true;
+    child.receiveShadow = true;
+  });
+  return object;
+}
+
 function makeBox(width, height, depth, color, name) {
   const mesh = new THREE.Mesh(
     new THREE.BoxGeometry(width, height, depth),
@@ -824,6 +997,7 @@ function createLockerModel() {
   }
 
   const sideWalls = [];
+  const backWalls = [];
   [-2.1, 2.1].forEach((x, index) => {
     const wall = makeBox(0.22, 1.12, ASSEMBLY_LENGTH, '#111318', 'horizontalSideWall');
     wall.position.set(x, 0, 0);
@@ -1126,10 +1300,18 @@ function setPartVisible(mesh, visible) {
 
 function setPartOpacity(mesh, opacity) {
   mesh.visible = opacity > 0.01;
-  if (mesh.material) {
-    mesh.material.transparent = opacity < 1;
-    mesh.material.opacity = opacity;
-  }
+  const updateMaterial = (material) => {
+    material.transparent = opacity < 1;
+    material.opacity = opacity;
+    material.depthWrite = opacity > 0.82;
+  };
+  const updateObject = (object) => {
+    if (!object.material) return;
+    if (Array.isArray(object.material)) object.material.forEach(updateMaterial);
+    else updateMaterial(object.material);
+  };
+  updateObject(mesh);
+  if (!mesh.material && mesh.traverse) mesh.traverse(updateObject);
 }
 
 function updateLockerModel(group, unit, stage, time, stages) {
@@ -1471,7 +1653,20 @@ function updateLockerModel(group, unit, stage, time, stages) {
   }
 }
 
-function createTwoPartLockerModel() {
+function cloneGlbComponent(template) {
+  const clone = template.clone(true);
+  clone.traverse((object) => {
+    if (!object.isMesh || !object.material) return;
+    object.material = Array.isArray(object.material)
+      ? object.material.map((material) => material.clone())
+      : object.material.clone();
+    object.castShadow = true;
+    object.receiveShadow = true;
+  });
+  return clone;
+}
+
+function createTwoPartLockerModel(stageOneTemplates = null) {
   const group = new THREE.Group();
   group.scale.setScalar(0.74);
 
@@ -1481,156 +1676,375 @@ function createTwoPartLockerModel() {
   const lockRails = [];
   const locks = [];
   const sideWalls = [];
+  const backWalls = [];
   const shelves = [];
   const lockerCells = [];
   const moduleStartX = 1.48;
   const moduleFinalX = 1.02;
 
   for (let moduleIndex = 0; moduleIndex < MODULE_COUNT; moduleIndex += 1) {
-    const direction = moduleIndex === 0 ? -1 : 1;
+    const direction = moduleIndex === 0 ? 1 : -1;
+    const travelOffset = moduleIndex === 0 ? -2.72 : 2.72;
+    const moduleCenterX = stageOneTemplates?.moduleCenterX?.[moduleIndex] ?? 0;
+    const startX = stageOneTemplates ? 0 : direction * moduleStartX;
+    const finalX = stageOneTemplates ? moduleCenterX : direction * moduleFinalX;
     const root = new THREE.Group();
     root.name = `lockerModulePivot-${moduleIndex + 1}`;
-    root.position.set(direction * moduleStartX, 0, -ASSEMBLY_HALF_LENGTH);
-    root.userData.startX = direction * moduleStartX;
-    root.userData.finalX = direction * moduleFinalX;
+    root.position.set(startX, 0, ASSEMBLY_HALF_LENGTH + travelOffset);
+    root.userData.startX = startX;
+    root.userData.finalX = finalX;
+    root.userData.travelZ = ASSEMBLY_HALF_LENGTH + travelOffset;
+    root.userData.finalZ = ASSEMBLY_HALF_LENGTH;
+    root.userData.moduleIndex = moduleIndex;
 
     const content = new THREE.Group();
-    content.position.z = ASSEMBLY_HALF_LENGTH;
+    content.position.z = -ASSEMBLY_HALF_LENGTH;
+    // Obrot CALEJ czesci wokol Y - zamienia konce wzdluz dlugiej osi, wiec po
+    // postawieniu pionowym (etap koncowy) czesc stoi prawidlowo, a nie do gory
+    // nogami. Cala zawartosc obraca sie spojnie (drzwi nadal patrza na zewnatrz).
+    // Gdyby przegielo w druga strone - daj TUNE.partsRotY = 0.
+    content.rotation.y = TUNE.partsRotY;
     root.add(content);
     group.add(root);
     moduleRoots.push(root);
 
     const troughAssembly = new THREE.Group();
     troughAssembly.name = `rotatingTroughAssembly-${moduleIndex + 1}`;
-    troughAssembly.position.set(0.91, 0, 0);
-    troughAssembly.rotation.z = -Math.PI / 2;
+    troughAssembly.position.set(stageOneTemplates ? 0 : 0.91, 0, 0);
+    troughAssembly.rotation.z = stageOneTemplates ? 0 : -Math.PI / 2;
     content.add(troughAssembly);
     troughAssemblies.push(troughAssembly);
 
-    const troughSpine = makeBox(0.14, 1.08, ASSEMBLY_LENGTH - 0.08, '#94a3b8', `standingTrough-${moduleIndex + 1}`);
-    troughSpine.position.set(0, 0, 0);
-    troughParts.push(troughSpine);
-    troughAssembly.add(troughSpine);
+    if (stageOneTemplates?.trough) {
+      const troughModelGroup = new THREE.Group();
+      troughModelGroup.name = `glbTroughSet-${moduleIndex + 1}`;
+      const moduleTroughTemplates = moduleIndex === 0
+        ? [stageOneTemplates.centerTrough, stageOneTemplates.smallTroughLeft]
+        : [stageOneTemplates.trough, stageOneTemplates.smallTroughRight];
+      moduleTroughTemplates.forEach((template, componentIndex) => {
+        const troughModel = applyGlbMaterial(cloneGlbComponent(template), 'trough');
+        troughModel.name = `glbTrough-${moduleIndex + 1}-${componentIndex + 1}`;
+        troughModel.position.x = -moduleCenterX;
+        troughModelGroup.add(troughModel);
+      });
+      troughParts.push(troughModelGroup);
+      troughAssembly.add(troughModelGroup);
+    } else {
+      const troughSpine = makeBox(0.14, 1.08, ASSEMBLY_LENGTH - 0.08, '#94a3b8', `standingTrough-${moduleIndex + 1}`);
+      troughSpine.position.set(0, 0, 0);
+      troughParts.push(troughSpine);
+      troughAssembly.add(troughSpine);
 
-    [-0.49, 0.49].forEach((y, lipIndex) => {
-      const lip = makeBox(0.38, 0.1, ASSEMBLY_LENGTH - 0.04, '#cbd5e1', `standingTroughLip-${moduleIndex + 1}-${lipIndex + 1}`);
-      lip.position.set(-0.12, y, 0);
-      troughParts.push(lip);
-      troughAssembly.add(lip);
-    });
+      [-0.49, 0.49].forEach((y, lipIndex) => {
+        const lip = makeBox(0.38, 0.1, ASSEMBLY_LENGTH - 0.04, '#cbd5e1', `standingTroughLip-${moduleIndex + 1}-${lipIndex + 1}`);
+        lip.position.set(-0.12, y, 0);
+        troughParts.push(lip);
+        troughAssembly.add(lip);
+      });
 
-    const lockSide = -0.2;
-    const lockRail = makeBox(0.12, 0.72, ASSEMBLY_LENGTH - 0.22, '#1f2937', `lockRail-${moduleIndex + 1}`);
-    lockRail.position.set(-0.08, 0, 0);
-    lockRails.push(lockRail);
-    troughAssembly.add(lockRail);
+      const lockRail = makeBox(0.12, 0.72, ASSEMBLY_LENGTH - 0.22, '#1f2937', `lockRail-${moduleIndex + 1}`);
+      lockRail.position.set(-0.08, 0, 0);
+      lockRails.push(lockRail);
+      troughAssembly.add(lockRail);
+    }
+
+    // Zamki stawiamy na ZMIERZONEJ pozycji wiekszego koryta (pierwszy element
+    // zestawu = ten wiekszy/zamkowy). Mierzymy realne polozenie w scenie, wiec
+    // zamki nie laduja "w kosmosie" ani na mniejszej blasze - zawsze na duzym.
+    let lockSide = stageOneTemplates ? 0 : -0.2;
+    if (stageOneTemplates?.trough) {
+      const bigTrough = troughAssembly.getObjectByName(`glbTrough-${moduleIndex + 1}-1`);
+      if (bigTrough) {
+        group.updateMatrixWorld(true);
+        const troughCenter = new THREE.Box3().setFromObject(bigTrough).getCenter(new THREE.Vector3());
+        lockSide = troughAssembly.worldToLocal(troughCenter.clone()).x + (TUNE.lockX[moduleIndex] ?? 0);
+      } else {
+        lockSide = TUNE.lockX[moduleIndex] ?? 0;
+      }
+    }
+    const lockTargetY = stageOneTemplates ? -0.58 : 0;
 
     for (let row = 0; row < LOCKS_PER_MODULE; row += 1) {
       const rowZ = -2 + row * ASSEMBLY_ITEM_SPACING;
-      const lock = new THREE.Group();
-      lock.name = `module-${moduleIndex + 1}-lock-${row + 1}`;
+      const lock = stageOneTemplates?.lock
+        ? applyGlbMaterial(cloneGlbComponent(stageOneTemplates.lock), 'lock')
+        : new THREE.Group();
+      lock.name = stageOneTemplates?.lock
+        ? `glbModule-${moduleIndex + 1}-lock-${row + 1}`
+        : `module-${moduleIndex + 1}-lock-${row + 1}`;
       lock.position.set(lockSide, 0, rowZ);
       lock.userData.targetX = lockSide;
-      lock.userData.entryX = -1.15;
-      lock.userData.targetY = 0;
+      lock.userData.entryX = stageOneTemplates ? -direction * 1.42 : -1.15;
+      lock.userData.targetY = lockTargetY;
       lock.userData.moduleDirection = direction;
 
-      const housing = makeBox(0.26, 0.12, 0.15, '#111827', 'moduleLockHousing');
-      const latch = makeBox(0.13, 0.08, 0.08, '#facc15', 'moduleLockLatch');
-      latch.position.set(-0.16, 0.03, 0);
-      const pin = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.045, 0.045, 0.16, 16),
-        makeMaterial('#e5e7eb', 0.28, 0.72),
-      );
-      pin.rotation.x = Math.PI / 2;
-      pin.position.y = 0.08;
-      pin.castShadow = true;
-      lock.add(housing, latch, pin);
-      lock.userData.meshes = [housing, latch, pin];
+      if (stageOneTemplates?.lock) {
+        lock.userData.meshes = [];
+        lock.traverse((object) => {
+          if (object.isMesh) lock.userData.meshes.push(object);
+        });
+      } else {
+        const housing = makeBox(0.26, 0.12, 0.15, '#111827', 'moduleLockHousing');
+        const latch = makeBox(0.13, 0.08, 0.08, '#facc15', 'moduleLockLatch');
+        latch.position.set(-0.16, 0.03, 0);
+        const pin = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.045, 0.045, 0.16, 16),
+          makeMaterial('#e5e7eb', 0.28, 0.72),
+        );
+        pin.rotation.x = Math.PI / 2;
+        pin.position.y = 0.08;
+        pin.castShadow = true;
+        lock.add(housing, latch, pin);
+        lock.userData.meshes = [housing, latch, pin];
+      }
       locks.push(lock);
       troughAssembly.add(lock);
     }
 
+    const moduleWallTemplates = moduleIndex === 0
+      ? { left: stageOneTemplates?.sideWallCenter, right: stageOneTemplates?.sideWallLeft }
+      : { left: stageOneTemplates?.sideWallRight, right: stageOneTemplates?.sideWallCenter };
     [
-      { x: 0.91, phase: 'first', entryDirection: 1 },
-      { x: -0.91, phase: 'second', entryDirection: -1 },
-    ].forEach(({ x, phase, entryDirection }) => {
-      const wall = makeBox(0.22, 1.16, ASSEMBLY_LENGTH, '#111318', `moduleWall-${moduleIndex + 1}-${phase}`);
-      wall.position.set(x, 0, 0);
-      wall.userData.targetX = x;
-      wall.userData.targetY = 0;
+      { x: -0.91, phase: 'first', entryDirection: -1, template: moduleWallTemplates.left },
+      { x: 0.91, phase: 'second', entryDirection: 1, template: moduleWallTemplates.right },
+    ].forEach(({ x, phase, entryDirection, template }) => {
+      const wall = template
+        ? applyGlbMaterial(cloneGlbComponent(template), 'sideWall')
+        : makeBox(0.22, 1.16, ASSEMBLY_LENGTH, '#3c424a', `moduleWall-${moduleIndex + 1}-${phase}`);
+      wall.name = template
+        ? `glbModuleWall-${moduleIndex + 1}-${phase}`
+        : `moduleWall-${moduleIndex + 1}-${phase}`;
+      const targetX = template ? -moduleCenterX : x;
+      wall.position.set(targetX, 0, 0);
+      content.add(wall);
+      // Obrot pojedynczej sciany W MIEJSCU (TUNE.wallRot) - gdy zle obrocona.
+      const wallRot = TUNE.wallRot?.[`${moduleIndex}-${phase}`] ?? [0, 0, 0];
+      if (template && (wallRot[0] || wallRot[1] || wallRot[2])) {
+        group.updateMatrixWorld(true);
+        const before = content.worldToLocal(
+          new THREE.Box3().setFromObject(wall).getCenter(new THREE.Vector3()),
+        );
+        wall.rotation.set(wallRot[0], wallRot[1], wallRot[2]);
+        group.updateMatrixWorld(true);
+        const after = content.worldToLocal(
+          new THREE.Box3().setFromObject(wall).getCenter(new THREE.Vector3()),
+        );
+        wall.position.x += before.x - after.x;
+        wall.position.y += before.y - after.y;
+        wall.position.z += before.z - after.z;
+      }
+      // Reczne dosuniecie sciany (TUNE.wallOffset).
+      const wallOff = TUNE.wallOffset?.[`${moduleIndex}-${phase}`] ?? [0, 0, 0];
+      wall.position.x += wallOff[0];
+      wall.position.y += wallOff[1];
+      wall.position.z += wallOff[2];
+      wall.userData.targetX = wall.position.x;
+      wall.userData.targetY = wall.position.y;
+      wall.userData.baseRotZ = wallRot[2];
       wall.userData.entryDirection = entryDirection;
       wall.userData.phase = phase;
       sideWalls.push(wall);
-      content.add(wall);
     });
 
+    const backTemplate = moduleIndex === 0
+      ? stageOneTemplates?.backLeft
+      : stageOneTemplates?.backRight;
+    if (backTemplate) {
+      const backWall = applyGlbMaterial(cloneGlbComponent(backTemplate), 'backWall');
+      backWall.name = `glbBackWall-${moduleIndex + 1}`;
+      // Obrot, bo siatka byla "do gory nogami" (patrz TUNE.backWallRotX).
+      backWall.rotation.x = TUNE.backWallRotX;
+      backWall.position.set(-moduleCenterX, 0, 0);
+      content.add(backWall);
+      // Sciana tylnia byla montowana na GORZE. Ma byc na DOLE / z TYLU (patrz
+      // zdjecie). Mierzymy jej realny srodek i sprowadzamy go na TUNE.backWallY,
+      // a animacja podnosi ja tam od dolu (moze przenikac inne czesci).
+      group.updateMatrixWorld(true);
+      const backCenterY = content.worldToLocal(
+        new THREE.Box3().setFromObject(backWall).getCenter(new THREE.Vector3()),
+      ).y;
+      const backRestY = TUNE.backWallY - (backCenterY - backWall.position.y);
+      backWall.position.y = backRestY;
+      backWall.userData.targetY = backRestY;
+      backWall.userData.moduleDirection = direction;
+      backWalls.push(backWall);
+    }
+
     for (let row = 0; row < LOCKS_PER_MODULE; row += 1) {
-      const shelf = makeBox(1.72, 1.02, 0.1, '#dbe4ec', `moduleShelf-${moduleIndex + 1}-${row + 1}`);
-      shelf.position.set(0, 0, -2 + row * ASSEMBLY_ITEM_SPACING);
-      shelf.userData.targetY = 0;
+      // Pozycja rzedu skrytek (drzwi + polki) - strojona przez TUNE.cellRow*,
+      // zeby skrytki wypelnily cala kolumne (przeciw szparze u gory/dolu).
+      const rowZ = TUNE.cellRowStart + row * TUNE.cellRowSpacing;
+      // Polka: prawdziwy model GLB (polka.glb) zamiast pudelka. Obrot/skala/
+      // pozycja sterowane przez TUNE.shelf* (strojenie na zywo).
+      let shelf;
+      if (stageOneTemplates?.shelf) {
+        shelf = applyGlbMaterial(cloneGlbComponent(stageOneTemplates.shelf), 'shelf');
+        shelf.name = `glbModuleShelf-${moduleIndex + 1}-${row + 1}`;
+        shelf.rotation.x = TUNE.shelfRotX;
+        shelf.scale.multiplyScalar(TUNE.shelfScale);
+      } else {
+        shelf = makeBox(1.72, 1.02, 0.1, '#c2cad2', `moduleShelf-${moduleIndex + 1}-${row + 1}`);
+      }
+      shelf.position.set(
+        TUNE.shelfOffset[0],
+        TUNE.shelfOffset[1],
+        rowZ + TUNE.shelfOffset[2],
+      );
+      shelf.userData.targetY = TUNE.shelfOffset[1];
       shelf.userData.moduleDirection = direction;
       shelves.push(shelf);
       content.add(shelf);
 
       const cell = new THREE.Group();
       cell.name = `moduleCell-${moduleIndex + 1}-${row + 1}`;
-      cell.position.set(0, 0.59, -2 + row * ASSEMBLY_ITEM_SPACING);
+      cell.position.set(0, 0.59, rowZ);
       cell.userData.targetY = 0.59;
       cell.userData.entryX = direction * 0.65;
       cell.userData.meshes = [];
 
-      [
-        [1.72, 0.05, 0.035, 0, 0, -0.17],
-        [1.72, 0.05, 0.035, 0, 0, 0.17],
-        [0.045, 0.05, 0.34, -0.86, 0, 0],
-        [0.045, 0.05, 0.34, 0.86, 0, 0],
-      ].forEach(([width, height, depth, x, y, z]) => {
-        const edge = makeBox(width, height, depth, '#3f4854', 'moduleCellEdge');
-        edge.position.set(x, y, z);
-        cell.userData.meshes.push(edge);
-        cell.add(edge);
-      });
+      // Proceduralna obramowka skrytki - tylko dla zaslepki (pudelkowych drzwi).
+      // Przy prawdziwych drzwiach GLB ramka jest zbedna (drzwi maja swoja).
+      if (!stageOneTemplates?.doors) {
+        [
+          [1.72, 0.05, 0.035, 0, 0, -0.17],
+          [1.72, 0.05, 0.035, 0, 0, 0.17],
+          [0.045, 0.05, 0.34, -0.86, 0, 0],
+          [0.045, 0.05, 0.34, 0.86, 0, 0],
+        ].forEach(([width, height, depth, x, y, z]) => {
+          const edge = makeBox(width, height, depth, '#3f4854', 'moduleCellEdge');
+          edge.position.set(x, y, z);
+          cell.userData.meshes.push(edge);
+          cell.add(edge);
+        });
+      }
 
-      const door = makeBox(1.63, 0.075, 0.29, '#f8fafc', 'moduleLockerDoor');
-      door.position.y = 0.025;
+      // Drzwi: prawdziwy model GLB (jeden z 4 rozmiarow wg TUNE.doorType).
+      // Obrot/skala/pozycja sterowane przez TUNE.door* (strojenie na zywo).
+      let door;
+      if (stageOneTemplates?.doors) {
+        const doorTemplate = stageOneTemplates.doors[TUNE.doorType] ?? stageOneTemplates.doors.l;
+        door = applyGlbMaterial(cloneGlbComponent(doorTemplate), 'door');
+        door.name = `glbModuleDoor-${moduleIndex + 1}-${row + 1}`;
+        door.rotation.x = TUNE.doorRotX;
+        door.rotation.y = TUNE.doorRotY;
+        door.scale.multiplyScalar(TUNE.doorScale);
+        door.position.set(TUNE.doorOffset[0], 0.025 + TUNE.doorOffset[1], TUNE.doorOffset[2]);
+      } else {
+        door = makeBox(1.63, 0.075, 0.29, '#d9dee3', 'moduleLockerDoor');
+        door.position.y = 0.025;
+      }
       cell.userData.meshes.push(door);
       cell.add(door);
+
+      // Szary pasek na granicy skrytek - zeby biale drzwi sie nie zlewaly w
+      // jeden prostokat. Lezy tuz nad licem drzwi, na granicy z sasiednia
+      // skrytka. Grubosc i widocznosc sterowane przez TUNE.cellGap.
+      if (stageOneTemplates?.doors && TUNE.cellGap > 0) {
+        const gapStrip = makeBox(TUNE.cellGapWidth, 0.06, TUNE.cellGap, '#565d66', 'cellGapStrip');
+        gapStrip.position.set(
+          TUNE.doorOffset[0] + TUNE.cellGapOffset[0],
+          0.025 + TUNE.doorOffset[1] + 0.06 + TUNE.cellGapOffset[1],
+          TUNE.doorOffset[2] + TUNE.cellRowSpacing / 2 + TUNE.cellGapOffset[2],
+        );
+        cell.userData.meshes.push(gapStrip);
+        cell.add(gapStrip);
+      }
+
       lockerCells.push(cell);
       content.add(cell);
     }
   }
 
-  const base = makeBox(4.58, 0.36, 1.38, '#0d1014', 'joinedBase');
-  base.position.set(0, -0.13, -ASSEMBLY_HALF_LENGTH);
-  base.userData.targetY = -0.13;
+  const base = stageOneTemplates?.base
+    ? applyGlbMaterial(cloneGlbComponent(stageOneTemplates.base), 'base')
+    : makeBox(4.58, 0.36, 1.38, '#24282d', 'joinedBase');
+  base.name = stageOneTemplates?.base ? 'glbJoinedBase' : 'joinedBase';
+  if (stageOneTemplates?.base) {
+    // Podstawa byla "do gory nogami" (PI/2) i zwinieta w punkcie (0, y, 0).
+    // Odwracamy o 180 stopni (-PI/2) i stawiamy POD kolumna (Z = miejsce,
+    // gdzie staja polowki), zamiast z boku tasmy.
+    base.rotation.x = -Math.PI / 2;
+    base.position.set(0, stageOneTemplates.standingOffsetY, ASSEMBLY_HALF_LENGTH);
+    base.userData.targetZ = ASSEMBLY_HALF_LENGTH;
+  } else {
+    base.position.set(0, -0.13, -ASSEMBLY_HALF_LENGTH);
+  }
+  base.userData.targetY = stageOneTemplates?.base ? stageOneTemplates.standingOffsetY : -0.13;
   group.add(base);
 
-  const baseFront = makeBox(4.34, 0.3, 0.14, '#090b0e', 'joinedBaseFront');
-  baseFront.position.set(0, 0.09, -ASSEMBLY_HALF_LENGTH - 0.62);
-  baseFront.userData.targetY = 0.09;
+  const baseFront = stageOneTemplates?.base
+    ? new THREE.Group()
+    : makeBox(4.34, 0.3, 0.14, '#090b0e', 'joinedBaseFront');
+  baseFront.name = 'joinedBaseFront';
+  baseFront.position.set(0, stageOneTemplates?.base ? stageOneTemplates.standingOffsetY : 0.09, stageOneTemplates?.base ? 0 : -ASSEMBLY_HALF_LENGTH - 0.62);
+  baseFront.userData.targetY = stageOneTemplates?.base ? stageOneTemplates.standingOffsetY : 0.09;
   group.add(baseFront);
 
-  const backPanel = makeBox(4.12, ASSEMBLY_LENGTH - 0.12, 0.12, '#15181d', 'joinedBackPanel');
+  const backPanel = stageOneTemplates?.backLeft && stageOneTemplates?.backRight
+    ? new THREE.Group()
+    : makeBox(4.12, ASSEMBLY_LENGTH - 0.12, 0.12, '#15181d', 'joinedBackPanel');
+  backPanel.name = 'joinedBackPanel';
   backPanel.position.set(0, ASSEMBLY_HALF_LENGTH, -1.83);
   backPanel.userData.targetY = ASSEMBLY_HALF_LENGTH;
   backPanel.userData.targetZ = -1.83;
   group.add(backPanel);
 
-  const centerJoin = makeBox(0.17, ASSEMBLY_LENGTH - 0.35, 0.13, '#252b33', 'centerJoinProfile');
+  // Stary profil laczacy (centerJoinProfile) - NIEUZYWANY. Zostaje pusta grupa,
+  // zeby reszta kodu (finalize) dzialala bez zmian, ale nic sie nie pokazuje.
+  const centerJoin = new THREE.Group();
   centerJoin.position.set(0, ASSEMBLY_HALF_LENGTH, -3.0);
   centerJoin.userData.targetY = ASSEMBLY_HALF_LENGTH;
   centerJoin.userData.targetZ = -3.0;
   group.add(centerJoin);
 
-  const roof = makeBox(4.3, 0.18, 1.42, '#202832', 'singleRoof');
-  roof.position.set(0, ASSEMBLY_LENGTH + 0.08, -ASSEMBLY_HALF_LENGTH);
-  roof.userData.targetY = ASSEMBLY_LENGTH + 0.08;
+  const roof = stageOneTemplates?.roof
+    ? applyGlbMaterial(cloneGlbComponent(stageOneTemplates.roof), 'roof')
+    : makeBox(4.3, 0.18, 1.42, '#363c44', 'singleRoof');
+  roof.name = stageOneTemplates?.roof ? 'glbSingleRoof' : 'singleRoof';
+  if (stageOneTemplates?.roof) {
+    // Dach na GORZE kolumny. Obrot TUNE.roofRot (kolejnosc YXZ: rotY = obrot
+    // wokol PIONU, wiec rotY=PI obraca skos na druga strone NIE kladac dachu na
+    // sztorc). Po obrocie USTAWIAM srodek dachu dokladnie na szczycie kolumny
+    // (X=0, Z=ASSEMBLY_HALF_LENGTH) + TUNE.roofOffset. Wysokosc -> targetY.
+    roof.rotation.order = 'YXZ';
+    roof.rotation.set(TUNE.roofRot[0], TUNE.roofRot[1], TUNE.roofRot[2]);
+    roof.position.set(0, stageOneTemplates.standingOffsetY + ASSEMBLY_LENGTH + TUNE.roofYOffset, ASSEMBLY_HALF_LENGTH);
+    group.add(roof);
+    group.updateMatrixWorld(true);
+    const c = group.worldToLocal(new THREE.Box3().setFromObject(roof).getCenter(new THREE.Vector3()));
+    roof.position.x += TUNE.roofOffset[0] - c.x;
+    roof.position.z += ASSEMBLY_HALF_LENGTH + TUNE.roofOffset[2] - c.z;
+    roof.userData.targetZ = roof.position.z;
+  } else {
+    roof.position.set(0, ASSEMBLY_LENGTH + 0.08, -ASSEMBLY_HALF_LENGTH);
+  }
+  roof.userData.targetY = stageOneTemplates?.roof
+    ? stageOneTemplates.standingOffsetY + ASSEMBLY_LENGTH + TUNE.roofYOffset + TUNE.roofOffset[1]
+    : ASSEMBLY_LENGTH + 0.08;
   group.add(roof);
 
-  const roofFascia = makeBox(4.26, 0.48, 0.2, '#090b0e', 'singleRoofFascia');
-  roofFascia.position.set(0, ASSEMBLY_LENGTH - 0.04, -ASSEMBLY_HALF_LENGTH - 0.62);
-  roofFascia.userData.targetY = ASSEMBLY_LENGTH - 0.04;
+  const roofFascia = stageOneTemplates?.canopy
+    ? applyGlbMaterial(cloneGlbComponent(stageOneTemplates.canopy), 'canopy')
+    : makeBox(4.26, 0.48, 0.2, '#9aa3ac', 'singleRoofFascia');
+  roofFascia.name = stageOneTemplates?.canopy ? 'glbCanopy' : 'singleRoofFascia';
+  if (stageOneTemplates?.canopy) {
+    // Daszek POD dachem (okap). Jak dach: obrot YXZ (rotY wokol pionu) i srodek
+    // ustawiany na szczycie kolumny + TUNE.canopyOffset. Wysokosc -> targetY.
+    roofFascia.rotation.order = 'YXZ';
+    roofFascia.rotation.set(TUNE.canopyRot[0], TUNE.canopyRot[1], TUNE.canopyRot[2]);
+    roofFascia.position.set(0, stageOneTemplates.standingOffsetY + ASSEMBLY_LENGTH + TUNE.canopyYOffset, ASSEMBLY_HALF_LENGTH);
+    group.add(roofFascia);
+    group.updateMatrixWorld(true);
+    const c = group.worldToLocal(new THREE.Box3().setFromObject(roofFascia).getCenter(new THREE.Vector3()));
+    roofFascia.position.x += TUNE.canopyOffset[0] - c.x;
+    roofFascia.position.z += ASSEMBLY_HALF_LENGTH + TUNE.canopyOffset[2] - c.z;
+    roofFascia.userData.targetZ = roofFascia.position.z;
+  } else {
+    roofFascia.position.set(0, ASSEMBLY_LENGTH - 0.04, -ASSEMBLY_HALF_LENGTH - 0.62);
+  }
+  roofFascia.userData.targetY = stageOneTemplates?.canopy
+    ? stageOneTemplates.standingOffsetY + ASSEMBLY_LENGTH + TUNE.canopyYOffset + TUNE.canopyOffset[1]
+    : ASSEMBLY_LENGTH - 0.04;
   group.add(roofFascia);
 
   const warningLight = new THREE.Group();
@@ -1662,6 +2076,7 @@ function createTwoPartLockerModel() {
     lockRails,
     locks,
     sideWalls,
+    backWalls,
     shelves,
     lockerCells,
     base,
@@ -1674,6 +2089,7 @@ function createTwoPartLockerModel() {
     warningBulb,
     warningGlow,
   };
+  group.userData.usesStageOneGlb = Boolean(stageOneTemplates?.trough && stageOneTemplates?.lock);
 
   return group;
 }
@@ -1724,24 +2140,29 @@ function updateTwoPartLockerModel(group, unit, stage, time, stages) {
     lock.scale.setScalar(0.76 + progress * 0.24);
     lock.userData.meshes.forEach((mesh) => {
       setPartOpacity(mesh, visibleProgress);
-      mesh.material.emissive = new THREE.Color('#facc15');
+      mesh.material.emissive = new THREE.Color(ACCENT_COLOR);
       mesh.material.emissiveIntensity = rawProgress > 0 && rawProgress < 1
-        ? 0.28 + Math.sin(time * 8 + index) * 0.1
+        ? 0.14 + Math.sin(time * 8 + index) * 0.05
         : 0;
     });
   });
 
   const troughTurnProgress = smooth(structureBuild / 0.2);
   parts.troughAssemblies.forEach((assembly) => {
-    assembly.rotation.z = -Math.PI * 0.5 * (1 - troughTurnProgress);
-    assembly.position.y = THREE.MathUtils.lerp(-0.5, 0, troughTurnProgress);
+    assembly.rotation.z = group.userData.usesStageOneGlb
+      ? 0
+      : -Math.PI * 0.5 * (1 - troughTurnProgress);
+    assembly.position.y = group.userData.usesStageOneGlb
+      ? 0
+      : THREE.MathUtils.lerp(-0.5, 0, troughTurnProgress);
   });
 
   const animateWall = (wall, progress) => {
     setPartOpacity(wall, progress);
     wall.position.x = wall.userData.targetX + wall.userData.entryDirection * (1 - progress) * 0.32;
     wall.position.y = wall.userData.targetY + (1 - progress) * 1.15;
-    wall.rotation.z = wall.userData.entryDirection * (1 - progress) * 0.12;
+    wall.rotation.z = (wall.userData.baseRotZ ?? 0)
+      + wall.userData.entryDirection * (1 - progress) * 0.12;
   };
 
   const firstWalls = parts.sideWalls.filter((wall) => wall.userData.phase === 'first');
@@ -1759,8 +2180,23 @@ function updateTwoPartLockerModel(group, unit, stage, time, stages) {
     shelf.position.y = shelf.userData.targetY + (1 - progress) * 0.95;
     shelf.position.x = (1 - progress) * shelf.userData.moduleDirection * 0.45;
     shelf.rotation.z = (1 - progress) * shelf.userData.moduleDirection * 0.1;
-    shelf.material.emissive = new THREE.Color('#38bdf8');
-    shelf.material.emissiveIntensity = rawProgress > 0 && rawProgress < 1 ? 0.22 : 0;
+    // Polka GLB to grupa (brak .material) - emisje tylko dla proceduralnej.
+    if (shelf.material) {
+      shelf.material.emissive = new THREE.Color(ACCENT_COLOR);
+      shelf.material.emissiveIntensity = rawProgress > 0 && rawProgress < 1 ? 0.12 : 0;
+    }
+  });
+
+  const backWallTimeline = Math.max(0, (structureBuild - 0.7) / 0.16) * parts.backWalls.length;
+  parts.backWalls.forEach((backWall, index) => {
+    const rawProgress = THREE.MathUtils.clamp(backWallTimeline - index, 0, 1);
+    const progress = smooth(rawProgress);
+    setPartOpacity(backWall, progress);
+    // Sciana tylnia wjezdza WYRAZNIE OD DOLU (zeby skrytki montowac od gory) i
+    // konczy na swojej pozycji z tylu. Moze przenikac przez inne czesci -
+    // wazne, ze startuje gleboko pod spodem i podnosi sie na miejsce.
+    backWall.position.y = backWall.userData.targetY - (1 - progress) * TUNE.backWallDrop;
+    backWall.rotation.x = TUNE.backWallRotX; // utrzymaj obrot (nie zerowac!)
   });
 
   const secondWalls = parts.sideWalls.filter((wall) => wall.userData.phase === 'second');
@@ -1788,18 +2224,35 @@ function updateTwoPartLockerModel(group, unit, stage, time, stages) {
     part.position.y = part.userData.targetY - (1 - baseProgress) * 0.48;
   });
 
-  const liftProgress = smooth((finalizeBuild - 0.08) / 0.46);
-  const joinProgress = smooth((finalizeBuild - 0.54) / 0.16);
+  // Sekwencja koncowa "jedna za druga": pierwsza polowa wstaje pionowo na
+  // podstawe i ZOSTAJE (wyrazny postoj), dopiero potem druga polowa nadjezdza
+  // i dolacza obok. Pozycje docelowe (finalX/finalZ) pozostaja nietkniete -
+  // wynikaja z jednej ramy CAD, wiec polowy skladaja sie idealnie w calosc.
   parts.moduleRoots.forEach((root) => {
-    root.rotation.x = -Math.PI * 0.5 * liftProgress;
-    root.position.x = THREE.MathUtils.lerp(root.userData.startX, root.userData.finalX, joinProgress);
+    const isFirstModule = root.userData.moduleIndex === 0;
+    // 1. polowa: szybkie podniesienie i ustawienie, potem dlugi postoj.
+    // 2. polowa: startuje znacznie pozniej (czas oczekiwania widoczny w scenie).
+    const liftProgress = isFirstModule
+      ? smooth((finalizeBuild - 0.08) / 0.22)
+      : smooth((finalizeBuild - 0.52) / 0.22);
+    const joinProgress = isFirstModule
+      ? smooth((finalizeBuild - 0.20) / 0.11)
+      : smooth((finalizeBuild - 0.64) / 0.11);
+    // Dodatkowy odstep miedzy polowkami (TUNE.halfGapX) - przeciw nachodzeniu.
+    const gap = (TUNE.halfGapX ?? 0) * (isFirstModule ? 0.5 : -0.5);
+    // Pionowe dociagniecie stojacych kolumn (TUNE.columnSettleY) - gdy lewituja.
+    const settle = (TUNE.columnSettleY ?? 0) * joinProgress;
+    root.rotation.x = Math.PI * 0.5 * liftProgress;
+    root.position.x = THREE.MathUtils.lerp(root.userData.startX, root.userData.finalX, joinProgress) + gap;
+    root.position.y = settle;
+    root.position.z = THREE.MathUtils.lerp(root.userData.travelZ, root.userData.finalZ, joinProgress);
   });
 
-  const centerProgress = smooth((finalizeBuild - 0.61) / 0.12);
+  const centerProgress = smooth((finalizeBuild - 0.78) / 0.08);
   setPartOpacity(parts.centerJoin, centerProgress);
   parts.centerJoin.position.y = parts.centerJoin.userData.targetY + (1 - centerProgress) * 0.65;
 
-  const backProgress = smooth((finalizeBuild - 0.7) / 0.16);
+  const backProgress = smooth((finalizeBuild - 0.8) / 0.08);
   setPartOpacity(parts.backPanel, backProgress);
   parts.backPanel.position.y = parts.backPanel.userData.targetY;
   parts.backPanel.position.z = parts.backPanel.userData.targetZ + (1 - backProgress) * 1.15;
@@ -1816,23 +2269,18 @@ function updateTwoPartLockerModel(group, unit, stage, time, stages) {
     fascia.position.y = fascia.userData.targetY + (1 - progress) * 0.7;
   });
 
-  parts.warningLight.visible = Boolean(unit.isBlocked);
-  if (unit.isBlocked) {
-    const pulse = 1 + Math.sin(time * 9) * 0.18;
-    parts.warningBulb.scale.setScalar(pulse);
-    parts.warningBulb.material.emissiveIntensity = 1.7 + Math.sin(time * 10) * 0.55;
-    parts.warningGlow.intensity = 1.7 + Math.sin(time * 10) * 0.65;
-  } else {
-    parts.warningBulb.scale.setScalar(1);
-    parts.warningBulb.material.emissiveIntensity = 0;
-    parts.warningGlow.intensity = 0;
-  }
+  // Lampy ostrzegawcze wylaczone - unosily sie nad linia jako pomaranczowe
+  // stozki i wygladaly na blad. Postoj/oczekiwanie pokazujemy sama animacja.
+  parts.warningLight.visible = false;
+  parts.warningGlow.intensity = 0;
 }
 
 function ThreeProductionScene({ stages, visibleUnits }) {
   const mountRef = useRef(null);
   const controlsRef = useRef(null);
   const latestRef = useRef({ stages, visibleUnits });
+  const [cadModelStatus, setCadModelStatus] = useState('loading');
+  const [stageOneModelStatus, setStageOneModelStatus] = useState('loading');
 
   latestRef.current = { stages, visibleUnits };
 
@@ -1855,7 +2303,8 @@ function ThreeProductionScene({ stages, visibleUnits }) {
 
     const mount = mountRef.current;
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#eef4f8');
+    scene.background = new THREE.Color('#e7edf2');
+    scene.fog = new THREE.Fog('#e7edf2', 42, 96);
 
     const camera = new THREE.PerspectiveCamera(52, 1, 0.1, 240);
     camera.position.set(0, 16, 24);
@@ -1865,8 +2314,19 @@ function ThreeProductionScene({ stages, visibleUnits }) {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Tone mapping + sRGB daja bardziej "fotograficzny", profesjonalny render.
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.06;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.domElement.className = 'production-canvas';
     mount.appendChild(renderer.domElement);
+
+    // Mapa otoczenia (PMREM) - daje metalicznym czesciom realistyczne odbicia,
+    // co jest kluczowe dla stalowo-szarej, stonowanej estetyki.
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    pmremGenerator.compileEquirectangularShader();
+    const environmentTexture = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = environmentTexture;
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -1879,22 +2339,36 @@ function ThreeProductionScene({ stages, visibleUnits }) {
     controls.target.set(0, 0.8, 0);
     controlsRef.current = controls;
 
-    const ambient = new THREE.HemisphereLight('#ffffff', '#8ca0b3', 2.35);
+    const ambient = new THREE.HemisphereLight('#ffffff', '#9aa9b8', 1.55);
     scene.add(ambient);
 
-    const key = new THREE.DirectionalLight('#ffffff', 2.8);
+    const key = new THREE.DirectionalLight('#ffffff', 2.5);
     key.position.set(-5, 9, 6);
     key.castShadow = true;
     key.shadow.mapSize.set(2048, 2048);
+    key.shadow.bias = -0.0004;
+    key.shadow.normalBias = 0.02;
+    key.shadow.radius = 4;
+    key.shadow.camera.near = 0.5;
+    key.shadow.camera.far = 60;
+    key.shadow.camera.left = -22;
+    key.shadow.camera.right = 22;
+    key.shadow.camera.top = 22;
+    key.shadow.camera.bottom = -22;
     scene.add(key);
 
-    const fill = new THREE.PointLight('#dbeafe', 1.4, 28);
+    // Chlodne swiatlo konturowe z tylu - oddziela modele od tla, podkresla krawedzie.
+    const rim = new THREE.DirectionalLight('#cfe0f2', 1.15);
+    rim.position.set(7, 6, -9);
+    scene.add(rim);
+
+    const fill = new THREE.PointLight('#e3edf7', 0.8, 34);
     fill.position.set(6, 5, -5);
     scene.add(fill);
 
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(22, 16),
-      new THREE.MeshStandardMaterial({ color: '#dfe7ef', roughness: 0.86 }),
+      new THREE.MeshStandardMaterial({ color: '#d4dde6', roughness: 0.78, metalness: 0.05 }),
     );
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = -0.03;
@@ -1907,8 +2381,12 @@ function ThreeProductionScene({ stages, visibleUnits }) {
     scene.add(unitGroup);
 
     const lockers = new Map();
+    const cadLockers = new Map();
     const rollers = [];
     const stationWorkers = [];
+    let cadModelTemplate = null;
+    let stageOneTemplates = null;
+    let disposed = false;
     let lastStageSignature = '';
     let lastFittedStageCount = -1;
     let routePoints = [];
@@ -2315,6 +2793,191 @@ function ThreeProductionScene({ stages, visibleUnits }) {
     resize();
     rebuildStatic();
 
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('/draco/');
+    dracoLoader.setDecoderConfig({ type: 'wasm' });
+    const gltfLoader = new GLTFLoader();
+    gltfLoader.setDRACOLoader(dracoLoader);
+
+    const prepareAlignedComponent = (source, scale, center = false) => {
+      source.scale.multiplyScalar(scale);
+      source.updateMatrixWorld(true);
+      if (center) {
+        const bounds = new THREE.Box3().setFromObject(source);
+        const componentCenter = bounds.getCenter(new THREE.Vector3());
+        source.position.sub(componentCenter);
+        source.updateMatrixWorld(true);
+      }
+      source.traverse((object) => {
+        if (!object.isMesh) return;
+        object.castShadow = true;
+        object.receiveShadow = true;
+      });
+      const template = new THREE.Group();
+      template.add(source);
+      return template;
+    };
+
+    Promise.all([
+      gltfLoader.loadAsync(LOCK_TROUGH_MODEL_URL),
+      gltfLoader.loadAsync(CENTER_TROUGH_MODEL_URL),
+      gltfLoader.loadAsync(SMALL_TROUGH_LEFT_MODEL_URL),
+      gltfLoader.loadAsync(SMALL_TROUGH_RIGHT_MODEL_URL),
+      gltfLoader.loadAsync(LOCK_MODEL_URL),
+      gltfLoader.loadAsync(SIDE_WALL_LEFT_MODEL_URL),
+      gltfLoader.loadAsync(SIDE_WALL_CENTER_MODEL_URL),
+      gltfLoader.loadAsync(SIDE_WALL_RIGHT_MODEL_URL),
+      gltfLoader.loadAsync(BACK_LEFT_MODEL_URL),
+      gltfLoader.loadAsync(BACK_RIGHT_MODEL_URL),
+      gltfLoader.loadAsync(BASE_MODEL_URL),
+      gltfLoader.loadAsync(ROOF_MODEL_URL),
+      gltfLoader.loadAsync(CANOPY_MODEL_URL),
+      gltfLoader.loadAsync(SHELF_MODEL_URL),
+      gltfLoader.loadAsync(DOOR_XL_MODEL_URL),
+      gltfLoader.loadAsync(DOOR_L_MODEL_URL),
+      gltfLoader.loadAsync(DOOR_S_MODEL_URL),
+      gltfLoader.loadAsync(DOOR_XS_MODEL_URL),
+    ]).then(([
+      troughGltf,
+      centerTroughGltf,
+      smallTroughLeftGltf,
+      smallTroughRightGltf,
+      lockGltf,
+      sideWallLeftGltf,
+      sideWallCenterGltf,
+      sideWallRightGltf,
+      backLeftGltf,
+      backRightGltf,
+      baseGltf,
+      roofGltf,
+      canopyGltf,
+      shelfGltf,
+      doorXlGltf,
+      doorLGltf,
+      doorSGltf,
+      doorXsGltf,
+    ]) => {
+      if (disposed) return;
+      troughGltf.scene.updateMatrixWorld(true);
+      const troughBounds = new THREE.Box3().setFromObject(troughGltf.scene);
+      const troughSize = troughBounds.getSize(new THREE.Vector3());
+      const sharedScale = ASSEMBLY_LENGTH / Math.max(troughSize.z, 0.001);
+      const baseTemplate = prepareAlignedComponent(baseGltf.scene, sharedScale);
+      const standingBaseProbe = baseTemplate.clone(true);
+      standingBaseProbe.rotation.x = -Math.PI / 2; // zgodnie z odwroceniem podstawy
+      standingBaseProbe.updateMatrixWorld(true);
+      const standingBaseBounds = new THREE.Box3().setFromObject(standingBaseProbe);
+      const standingOffsetY = -0.13 - standingBaseBounds.min.y;
+      stageOneTemplates = {
+        trough: prepareAlignedComponent(troughGltf.scene, sharedScale),
+        centerTrough: prepareAlignedComponent(centerTroughGltf.scene, sharedScale),
+        smallTroughLeft: prepareAlignedComponent(smallTroughLeftGltf.scene, sharedScale),
+        smallTroughRight: prepareAlignedComponent(smallTroughRightGltf.scene, sharedScale),
+        lock: prepareAlignedComponent(lockGltf.scene, sharedScale, true),
+        sideWallLeft: prepareAlignedComponent(sideWallLeftGltf.scene, sharedScale),
+        sideWallCenter: prepareAlignedComponent(sideWallCenterGltf.scene, sharedScale),
+        sideWallRight: prepareAlignedComponent(sideWallRightGltf.scene, sharedScale),
+        backLeft: prepareAlignedComponent(backLeftGltf.scene, sharedScale),
+        backRight: prepareAlignedComponent(backRightGltf.scene, sharedScale),
+        base: baseTemplate,
+        roof: prepareAlignedComponent(roofGltf.scene, sharedScale),
+        canopy: prepareAlignedComponent(canopyGltf.scene, sharedScale),
+        shelf: prepareAlignedComponent(shelfGltf.scene, sharedScale, true),
+        doors: {
+          xl: prepareAlignedComponent(doorXlGltf.scene, sharedScale, true),
+          l: prepareAlignedComponent(doorLGltf.scene, sharedScale, true),
+          s: prepareAlignedComponent(doorSGltf.scene, sharedScale, true),
+          xs: prepareAlignedComponent(doorXsGltf.scene, sharedScale, true),
+        },
+        moduleCenterX: [0.24 * sharedScale, -0.243 * sharedScale],
+        standingOffsetY,
+        sharedScale,
+      };
+      lockers.forEach((model) => unitGroup.remove(model));
+      lockers.clear();
+      setStageOneModelStatus('ready');
+
+      // === Opcjonalny model polek + drzwi (drop-in) ===
+      // Gdy pod /models/components/shelves-doors.glb pojawi sie POPRAWNY plik
+      // (pojedyncza polka/drzwi, nisko-poligonowy), zostanie automatycznie
+      // wykryty, przeskalowany do tej samej ramy co reszta i podpiety zamiast
+      // proceduralnych zaslepek. Pusty/brakujacy plik jest bezpiecznie ignorowany.
+      gltfLoader.loadAsync(SHELVES_DOORS_MODEL_URL).then((shelvesDoorsGltf) => {
+        if (disposed) return;
+        let meshCount = 0;
+        let vertexCount = 0;
+        shelvesDoorsGltf.scene.traverse((object) => {
+          if (!object.isMesh) return;
+          meshCount += 1;
+          vertexCount += object.geometry?.attributes?.position?.count ?? 0;
+        });
+        if (meshCount === 0) {
+          console.info('shelves-doors.glb pusty - uzywam proceduralnych polek i drzwi.');
+          return;
+        }
+        // Zabezpieczenie wydajnosciowe: bardzo ciezki model (np. eksport calej
+        // sceny zamiast pojedynczych drzwi) jest odrzucany, zeby nie zabic FPS.
+        if (vertexCount > 60000) {
+          console.warn(
+            `shelves-doors.glb ma ${vertexCount} wierzcholkow - za ciezki dla wizualizacji. `
+            + 'Uzywam proceduralnych zaslepek. Wyeksportuj pojedyncze, nisko-poligonowe drzwi/polke.',
+          );
+          return;
+        }
+        stageOneTemplates.shelvesDoors = prepareAlignedComponent(
+          shelvesDoorsGltf.scene,
+          stageOneTemplates.sharedScale,
+        );
+        lockers.forEach((model) => unitGroup.remove(model));
+        lockers.clear();
+        console.info('Podpieto model polek + drzwi z GLB.');
+      }).catch(() => {
+        // Brak pliku - OK, korzystamy z proceduralnych zaslepek.
+      });
+    }).catch((error) => {
+      console.error('Nie udalo sie zaladowac modeli montazowych GLB.', error);
+      if (!disposed) setStageOneModelStatus('error');
+    });
+
+    gltfLoader.load(
+      CAD_MODEL_URL,
+      (gltf) => {
+        if (disposed) return;
+
+        const source = gltf.scene;
+        source.rotation.x = -Math.PI / 2;
+        source.updateMatrixWorld(true);
+
+        const initialBounds = new THREE.Box3().setFromObject(source);
+        const initialSize = initialBounds.getSize(new THREE.Vector3());
+        const scale = CAD_MODEL_HEIGHT / Math.max(initialSize.y, 0.001);
+        source.scale.multiplyScalar(scale);
+        source.updateMatrixWorld(true);
+
+        const normalizedBounds = new THREE.Box3().setFromObject(source);
+        const normalizedCenter = normalizedBounds.getCenter(new THREE.Vector3());
+        source.position.x -= normalizedCenter.x;
+        source.position.y -= normalizedBounds.min.y;
+        source.position.z -= normalizedCenter.z;
+        source.updateMatrixWorld(true);
+        source.traverse((object) => {
+          if (!object.isMesh) return;
+          object.castShadow = true;
+          object.receiveShadow = true;
+        });
+
+        cadModelTemplate = new THREE.Group();
+        cadModelTemplate.name = 'cadLockerTemplate';
+        cadModelTemplate.add(source);
+        setCadModelStatus('ready');
+      },
+      undefined,
+      (error) => {
+        console.error('Nie udalo sie zaladowac modelu CAD paczkomatu.', error);
+        if (!disposed) setCadModelStatus('error');
+      },
+    );
+
     let frame;
     const clock = new THREE.Clock();
 
@@ -2332,7 +2995,7 @@ function ThreeProductionScene({ stages, visibleUnits }) {
         activeNumbers.add(unit.key);
         let model = lockers.get(unit.key);
         if (!model) {
-          model = createTwoPartLockerModel();
+          model = createTwoPartLockerModel(stageOneTemplates);
           lockers.set(unit.key, model);
           unitGroup.add(model);
         }
@@ -2340,14 +3003,31 @@ function ThreeProductionScene({ stages, visibleUnits }) {
         const pose = getUnitPose(unit, routePoints);
         const stage = latestRef.current.stages[unit.currentIndex];
         const isHorizontalAssembly = ['locks', 'shelves', 'back', 'door', 'lockers', 'finalize'].includes(stage?.icon);
+        // Podniesienie montazu, zeby czesci lezaly NA rolotoku, a nie w nim.
+        // Faza pozioma (zamki/sciany/polki/drzwi) byla zatopiona w rolkach.
+        // Faza "finalize" (stawianie pionowe) zostaje na poziomie podstawy.
+        const isStandingStage = stage?.icon === 'finalize';
+        // Faza stojaca: opuszczamy caly paczkomat o TUNE.standingY, zeby podstawa
+        // siadla na tasmociagu (a nie lewitowala). Faza pozioma: lekkie uniesienie.
+        const conveyorLift = isStandingStage ? TUNE.standingY : 0.34;
         model.visible = true;
         model.position.copy(pose.position);
         model.position.y = isHorizontalAssembly
-          ? MODEL_LINE_Y
-          : MODEL_LINE_Y + Math.sin(time * 2 + unit.number) * 0.018;
+          ? MODEL_LINE_Y + conveyorLift
+          : MODEL_LINE_Y + conveyorLift + Math.sin(time * 2 + unit.number) * 0.018;
         model.rotation.y += Math.atan2(Math.sin(pose.angle - model.rotation.y), Math.cos(pose.angle - model.rotation.y)) * 0.16;
         model.scale.setScalar(unit.number === 1 ? 0.88 : 0.78);
         updateTwoPartLockerModel(model, unit, stage, time, latestRef.current.stages);
+
+        // === Produkt koncowy = zlozony model ===
+        // Wczesniej pod koniec ostatniego etapu scena podmieniala zlozony
+        // paczkomat na pojedynczy, gladki model CAD (paczkomatopytmalny.glb),
+        // ktory jest jedna szara bryla bez detali - wygladalo to gorzej niz
+        // sam montaz i ukrywalo laczenie polowek. Zgodnie z zalozeniem
+        // "to co sie zlozy ma byc produktem koncowym" - zostawiamy zlozony
+        // model widoczny do konca. Podmiana CAD jest wylaczona.
+        const cadModel = cadLockers.get(unit.key);
+        if (cadModel) cadModel.visible = false;
       });
 
       lockers.forEach((model, number) => {
@@ -2355,6 +3035,19 @@ function ThreeProductionScene({ stages, visibleUnits }) {
           model.visible = false;
         }
       });
+      cadLockers.forEach((model, number) => {
+        if (!activeNumbers.has(number)) {
+          model.visible = false;
+        }
+      });
+      renderer.domElement.dataset.cadInstances = String(cadLockers.size);
+      renderer.domElement.dataset.cadVisible = String(
+        [...cadLockers.values()].filter((model) => model.visible).length,
+      );
+      renderer.domElement.dataset.stageOneGlb = stageOneTemplates ? 'ready' : 'loading';
+      renderer.domElement.dataset.stageOneGlbUnits = String(
+        [...lockers.values()].filter((model) => model.userData.usesStageOneGlb).length,
+      );
 
       rollers.forEach((roller) => {
         roller.rotateY(0.09);
@@ -2462,10 +3155,14 @@ function ThreeProductionScene({ stages, visibleUnits }) {
     frame = requestAnimationFrame(render);
 
     return () => {
+      disposed = true;
       cancelAnimationFrame(frame);
       ro.disconnect();
       controls.dispose();
       controlsRef.current = null;
+      dracoLoader.dispose();
+      environmentTexture.dispose();
+      pmremGenerator.dispose();
       renderer.dispose();
       mount.removeChild(renderer.domElement);
     };
@@ -2474,310 +3171,4 @@ function ThreeProductionScene({ stages, visibleUnits }) {
   return (
     <div className="three-scene">
       <div className="zoom-controls" aria-label="Kontrola przyblizenia sceny 3D">
-        <button type="button" onClick={() => zoomCamera(1.2)} title="Oddal kamere">
-          <ZoomOut size={17} />
-        </button>
-        <button type="button" onClick={() => zoomCamera(0.82)} title="Przybliz kamere">
-          <ZoomIn size={17} />
-        </button>
-        <button
-          type="button"
-          onClick={() => controlsRef.current?.reset()}
-          title="Resetuj pozycje kamery"
-        >
-          <RotateCcw size={17} />
-        </button>
-      </div>
-      <div className="three-scene-mount" ref={mountRef} />
-    </div>
-  );
-}
-
-function ProductionLine({ stages, visibleUnits, conveyorDuration, productionFinished }) {
-  const leadUnit = visibleUnits[0] ?? {
-    currentIndex: productionFinished ? Math.max(stages.length - 1, 0) : 0,
-    progress: productionFinished ? 100 : 0,
-    assemblyProgress: productionFinished ? 100 : 0,
-    number: 1,
-  };
-  const currentStage = stages[leadUnit.currentIndex] ?? (productionFinished ? stages[stages.length - 1] : stages[0]);
-  const isFinished = productionFinished;
-  const isEntryStage = leadUnit.mode === 'entry';
-  const displayStageName = isEntryStage ? 'Podanie pustych koryt' : currentStage?.name;
-  const displayStageColor = isEntryStage ? '#64748b' : currentStage?.color;
-  const installedLockCount = Math.min(
-    LOCK_COUNT,
-    Math.floor(((leadUnit.assemblyProgress ?? leadUnit.progress ?? 0) / 100) * LOCK_COUNT),
-  );
-  const installedLockerCount = Math.min(
-    LOCKER_COUNT,
-    Math.floor(((leadUnit.assemblyProgress ?? leadUnit.progress ?? 0) / 100) * LOCKER_COUNT),
-  );
-  const statusLabel = isFinished
-    ? 'Seria zakonczona'
-    : leadUnit.mode === 'completed'
-      ? 'Gotowy paczkomat'
-    : leadUnit.mode === 'entry'
-      ? 'Dojazd na montaz zamkow'
-    : leadUnit.isBlocked
-    ? 'Czeka na wolny etap'
-    : leadUnit.mode === 'travel'
-      ? 'Przejazd'
-      : 'Aktualny postoj';
-  const occupiedStages = new Set(
-    visibleUnits
-      .filter((unit) => unit.mode !== 'travel' && unit.mode !== 'entry')
-      .map((unit) => unit.currentIndex),
-  );
-
-  return (
-    <section className="visual-area">
-      <div className="visual-header">
-        <div>
-          <p className="eyebrow">Wizualizacja</p>
-          <h1>Linia produkcyjna paczkomatu</h1>
-        </div>
-        <div className="live-pill">
-          <span />
-          {isFinished ? 'Limit osiagniety' : 'Na zywo'}
-        </div>
-      </div>
-
-      <div className="conveyor-wrap">
-        <div className="stations">
-          <motion.div
-            className={`station stage-zero ${isEntryStage ? 'active occupied' : ''}`}
-            layout
-            style={{ '--stage-color': '#64748b' }}
-          >
-            <div className="station-icon">
-              <Box className="station-svg" aria-hidden="true" />
-            </div>
-            <span>0</span>
-            <strong>Podanie koryt</strong>
-            <small>{formatTime(ENTRY_TRAVEL_SECONDS)}</small>
-          </motion.div>
-          {stages.map((stage, index) => (
-            <motion.div
-              className={`station ${!isEntryStage && index === leadUnit.currentIndex ? 'active' : ''} ${occupiedStages.has(index) ? 'occupied' : ''}`}
-              key={stage.id}
-              layout
-              style={{ '--stage-color': stage.color }}
-            >
-              <div className="station-icon">
-                <StageIcon icon={stage.icon} className="station-svg" />
-              </div>
-              <span>{index + 1}</span>
-              <strong>{stage.name || 'Etap'}</strong>
-              <small>{formatTime(clampNumber(stage.duration))}</small>
-            </motion.div>
-          ))}
-        </div>
-
-        <div className="factory-floor scene-layout">
-          <ThreeProductionScene stages={stages} visibleUnits={visibleUnits} />
-        </div>
-
-        <div className="process-readout">
-          <div>
-            <span style={{ backgroundColor: displayStageColor }} />
-            <p>{statusLabel}</p>
-            <strong>{displayStageName || 'Etap'}</strong>
-          </div>
-          <div>
-            <p>
-              {currentStage?.icon === 'locks'
-                ? 'Zamki zamontowane'
-                : currentStage?.icon === 'lockers'
-                  ? 'Skrytki zamontowane'
-                  : 'Postep etapu'}
-            </p>
-            <strong>
-              {currentStage?.icon === 'locks'
-                ? `${isFinished ? LOCK_COUNT : installedLockCount}/${LOCK_COUNT}`
-                : currentStage?.icon === 'lockers'
-                  ? `${isFinished ? LOCKER_COUNT : installedLockerCount}/${LOCKER_COUNT}`
-                : isFinished
-                  ? '100%'
-                  : `${Math.round(leadUnit.assemblyProgress ?? leadUnit.progress)}%`}
-            </strong>
-          </div>
-          <div>
-            <p>Paczkomaty na linii</p>
-            <strong>{visibleUnits.length}</strong>
-          </div>
-          <div>
-            <p>Pelna petla animacji</p>
-            <strong>{formatTime(conveyorDuration)}</strong>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function App() {
-  const [unitCount, setUnitCount] = useState(4);
-  const [stages, setStages] = useState(baseStages);
-  const [elapsed, setElapsed] = useState(0);
-  const [travelTimes, setTravelTimes] = useState(() => getDefaultTravelTimes(baseStages.length));
-  const [stopwatchRunning, setStopwatchRunning] = useState(false);
-  const [stopwatchElapsed, setStopwatchElapsed] = useState(0);
-  const stopwatchStartRef = useRef(0);
-  const stopwatchBaseRef = useRef(0);
-
-  const normalizedStages = useMemo(
-    () =>
-      stages.map((stage) => ({
-        ...stage,
-        duration: clampNumber(stage.duration),
-      })),
-    [stages],
-  );
-
-  const productionCount = Math.max(1, Math.floor(clampNumber(unitCount, 1)));
-  const normalizedTravelTimes = useMemo(
-    () => normalizeTravelTimes(travelTimes, normalizedStages.length),
-    [normalizedStages.length, travelTimes],
-  );
-  const productionSchedule = useMemo(
-    () => buildProductionSchedule(normalizedStages, productionCount, normalizedTravelTimes),
-    [normalizedStages, normalizedTravelTimes, productionCount],
-  );
-  const cycleTime = productionSchedule.soloCycleTime;
-  const launchInterval = productionSchedule.launchInterval;
-  const totalTime = productionSchedule.totalTime;
-  const animationCycle = Math.max(totalTime, 1);
-
-  React.useEffect(() => {
-    let frame;
-    const start = performance.now();
-    setElapsed(0);
-
-    const tick = (now) => {
-      const rawSeconds = (now - start) / 1000;
-      const seconds = rawSeconds >= animationCycle ? animationCycle + 0.001 : rawSeconds;
-      setElapsed(seconds);
-      if (rawSeconds < animationCycle) {
-        frame = requestAnimationFrame(tick);
-      }
-    };
-
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [animationCycle, normalizedStages.length, productionCount]);
-
-  React.useEffect(() => {
-    setTravelTimes((current) => normalizeTravelTimes(current, normalizedStages.length));
-  }, [normalizedStages.length]);
-
-  React.useEffect(() => {
-    if (!stopwatchRunning) return undefined;
-
-    let frame;
-    stopwatchStartRef.current = performance.now();
-
-    const tick = (now) => {
-      setStopwatchElapsed(stopwatchBaseRef.current + (now - stopwatchStartRef.current) / 1000);
-      frame = requestAnimationFrame(tick);
-    };
-
-    frame = requestAnimationFrame(tick);
-
-    return () => {
-      cancelAnimationFrame(frame);
-    };
-  }, [stopwatchRunning]);
-
-  const visibleUnits = useMemo(
-    () => getVisibleUnitsFromSchedule(productionSchedule, elapsed, normalizedStages.length),
-    [elapsed, normalizedStages.length, productionSchedule],
-  );
-
-  const updateStage = (id, patch) => {
-    setStages((current) => current.map((stage) => (stage.id === id ? { ...stage, ...patch } : stage)));
-  };
-
-  const updateTravelTime = (index, value) => {
-    setTravelTimes((current) => {
-      const next = normalizeTravelTimes(current, normalizedStages.length);
-      next[index] = value;
-      return next;
-    });
-  };
-
-  const toggleStopwatch = () => {
-    if (stopwatchRunning) {
-      stopwatchBaseRef.current = stopwatchElapsed;
-      setStopwatchRunning(false);
-      return;
-    }
-
-    stopwatchBaseRef.current = stopwatchElapsed;
-    setStopwatchRunning(true);
-  };
-
-  const resetStopwatch = () => {
-    stopwatchBaseRef.current = 0;
-    stopwatchStartRef.current = performance.now();
-    setStopwatchElapsed(0);
-  };
-
-  const addStage = () => {
-    setStages((current) => [
-      ...current,
-      {
-        id: crypto.randomUUID(),
-        name: `Etap ${current.length + 1}`,
-        duration: 5,
-        color: '#0f766e',
-        icon: 'box',
-      },
-    ]);
-  };
-
-  const removeStage = (id) => {
-    setStages((current) => (current.length === 1 ? current : current.filter((stage) => stage.id !== id)));
-  };
-
-  const resetStages = () => {
-    setStages(baseStages.map((stage) => ({ ...stage, id: crypto.randomUUID() })));
-    setTravelTimes(getDefaultTravelTimes(baseStages.length));
-  };
-
-  return (
-    <main className="app-shell">
-      <Metrics
-        unitCount={unitCount}
-        setUnitCount={setUnitCount}
-        cycleTime={cycleTime}
-        totalTime={totalTime}
-        stages={normalizedStages}
-        launchInterval={launchInterval}
-        travelTimes={normalizedTravelTimes}
-        updateTravelTime={updateTravelTime}
-        stopwatch={{
-          elapsed: stopwatchElapsed,
-          running: stopwatchRunning,
-          toggle: toggleStopwatch,
-          reset: resetStopwatch,
-        }}
-      />
-      <ProductionLine
-        stages={normalizedStages}
-        visibleUnits={visibleUnits}
-        conveyorDuration={animationCycle}
-        productionFinished={elapsed >= animationCycle}
-      />
-      <StageEditor
-        stages={stages}
-        updateStage={updateStage}
-        addStage={addStage}
-        removeStage={removeStage}
-        resetStages={resetStages}
-      />
-    </main>
-  );
-}
-
-createRoot(document.getElementById('root')).render(<App />);
+        <button type="button" onClick={() => zoomCamera(1.2)} title="Oddal kamere
