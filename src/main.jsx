@@ -161,6 +161,29 @@ const TUNE = {
   // Obrot sciany tylniej (radiany) - byla "do gory nogami", wiec domyslnie PI
   // (180 stopni). Gdyby trzeba bylo innej osi, daj znac.
   backWallRotX: Math.PI,
+  // === Sekwencja: jedna czesc przed druga (#4 - OSOBNE OBIEKTY) ===
+  // Druga polowa to TEN SAM paczkomat OPOZNIONY o tyle SEKUND - jedzie ta sama
+  // trasa wlasna sciezka, wiec stoi na prawdziwej, wczesniejszej stacji (a nie
+  // sztucznie przesunieta). Lider czeka na podstawie az dojedzie i sie zlacza.
+  // Wieksze = druga polowa dalej z tylu. MUSI byc < ~7s (postoj lidera na
+  // koncu), inaczej lider zniknie przed dolaczeniem.
+  halfDelaySeconds: 4,
+  partLagStages: 1,
+  // O ile druga polowa jest cofnieta NA TASMIE (zeby jechala ZA pierwsza, a nie
+  // obok). ~-17 = jedna pelna stacja w tyle; im bardziej ujemne, tym dalej za
+  // pierwsza. Zanika przy laczeniu na podstawie. Jesli druga polowa wyjdzie z
+  // PRZODU zamiast z tylu - ZMIEN ZNAK (np. 18). 0 = bez przesuniecia.
+  partTrailSpacing: -18,
+  // Gdy pierwsza polowa wchodzi w final, druga PODJEZDZA do bufora MIEDZY
+  // etapem 3 a 4 i tam czeka (zamiast blokowac stacje etapu 3). To wartosc tego
+  // bufora - mniej ujemna niz partTrailSpacing (np. polowa: -9).
+  partTrailBuffer: -9,
+  // Rozstaw stacji = DLUGOSC ROLOTOKU i odstepy miedzy czesciami. Domyslnie
+  // bylo 7.6; zwieksz, gdy czesci na siebie nachodza (np. 12, 14, 16).
+  stationSpacing: 13,
+  // Odstep miedzy KOLEJNYMI paczkomatami (w cyklach stacji). Po naprawie zajetosci
+  // stacji (ogon) zwykle 0 wystarcza. Zwieksz, gdy paczkomaty nadal za blisko.
+  launchGapStages: 0,
   // === Ostatni etap (stawianie pionowe) ===
   // Odstep X miedzy dwiema polowkami. DODATNIE = rozsuwa, UJEMNE = scala je
   // razem. Daj ujemne, gdy w srodku jest szpara / sciany sie rozjezdzaja.
@@ -252,7 +275,9 @@ const CAD_MODEL_HEIGHT = 3.45;
 const CONVEYOR_SURFACE_Y = CONVEYOR_ELEVATION + 0.55;
 
 const buildLinePoints = (count) => {
-  const spacing = 7.6;
+  // Rozstaw stacji = dlugosc rolotoku. Wiekszy = dluzsza tasma i wieksze
+  // odstepy miedzy czesciami (zeby nie nachodzily). Strojone przez TUNE.
+  const spacing = TUNE.stationSpacing ?? 7.6;
   const startZ = -((Math.max(count, 1) - 1) * spacing) / 2;
 
   return Array.from({ length: count }, (_, index) => (
@@ -314,9 +339,21 @@ const buildProductionSchedule = (stages, count, travelTimes = []) => {
   const stationFreeAt = Array(stageCount).fill(0);
   const units = [];
 
+  // #4: dodatkowy odstep miedzy kolejnymi paczkomatami, zeby OGON (czesc 2)
+  // poprzedniego nie nachodzil na CZOLO (czesc 1) nastepnego. Wyrazony w
+  // "cyklach stacji" (etap + dojazd) - patrz TUNE.launchGapStages.
+  const stageCycle = (stages[0]?.duration ?? 2) + (travelDurations[0] ?? 2);
+  const launchGap = Math.max(TUNE.launchGapStages ?? 0, 0) * stageCycle;
+  let prevEntryStart = -Infinity;
+
   for (let unitIndex = 0; unitIndex < unitCount; unitIndex += 1) {
     const segments = [];
-    const entryStart = Math.max(stationFreeAt[0] ?? 0, 0);
+    const entryStart = Math.max(
+      stationFreeAt[0] ?? 0,
+      0,
+      unitIndex === 0 ? 0 : prevEntryStart + launchGap,
+    );
+    prevEntryStart = entryStart;
     let arrivalAtStage = entryStart + ENTRY_TRAVEL_SECONDS;
     let finishTime = arrivalAtStage;
 
@@ -359,11 +396,14 @@ const buildProductionSchedule = (stages, count, travelTimes = []) => {
           duration: travelDuration,
         });
 
-        stationFreeAt[stageIndex] = travelStart;
+        // #4: stacja pozostaje zajeta jeszcze przez halfDelaySeconds PO przejezdzie
+        // czola - bo wtedy przejezdza OGON (druga polowa). Dzieki temu nastepny
+        // paczkomat czeka stacje dalej i nie wjezdza w czekajacy ogon na etapie 3.
+        stationFreeAt[stageIndex] = travelStart + (TUNE.halfDelaySeconds ?? 0);
         arrivalAtStage = travelEnd;
         finishTime = travelEnd;
       } else {
-        stationFreeAt[stageIndex] = waitEnd;
+        stationFreeAt[stageIndex] = waitEnd + (TUNE.halfDelaySeconds ?? 0);
         finishTime = waitEnd;
       }
     }
@@ -1843,6 +1883,7 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
       wall.userData.baseRotZ = wallRot[2];
       wall.userData.entryDirection = entryDirection;
       wall.userData.phase = phase;
+      wall.userData.moduleIndex = moduleIndex;
       sideWalls.push(wall);
     });
 
@@ -2094,43 +2135,63 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
   return group;
 }
 
-function updateTwoPartLockerModel(group, unit, stage, time, stages) {
+function updateTwoPartLockerModel(group, leadUnit, trailUnit, time, stages, halfMode) {
   const parts = group.userData.parts;
-  const stageProgress = unit.assemblyProgress ?? unit.progress ?? 0;
-  const normalizedProgress = THREE.MathUtils.clamp(stageProgress / 100, 0, 1);
   const stageIndex = (icon) => stages.findIndex((candidate) => candidate.icon === icon);
-  const buildFor = (icon) => {
-    const index = stageIndex(icon);
-    if (index < 0 || unit.currentIndex < index) return 0;
-    if (unit.currentIndex > index) return 1;
-    return normalizedProgress;
-  };
   const smooth = (value) => easeOut(THREE.MathUtils.clamp(value, 0, 1));
-  const locksBuild = unit.mode === 'entry' ? 0.12 : buildFor('locks');
-  const structureBuild = buildFor('shelves');
-  const lockersBuild = buildFor('lockers');
   const finalizeIndex = stageIndex('finalize');
-  const finalizeCompleted = finalizeIndex >= 0 && unit.currentIndex > finalizeIndex;
-  const finalizeBuild = finalizeCompleted ? 1 : buildFor('finalize');
 
-  const trayProgress = smooth(locksBuild / 0.12);
-  const troughVisibility = 1 - smooth(lockersBuild);
+  // === #4 (osobne obiekty): frakcje montazu liczone NIEZALEZNIE dla kazdej
+  // jednostki. Modul 0 = leadUnit (czolo), modul 1 = trailUnit (ogon, czyli ten
+  // sam paczkomat sprzed halfDelaySeconds). Brak sztucznej kompresji/przesuniec
+  // - separacje daje pozycja obu modeli na tasmie.
+  const fractionsForUnit = (u) => {
+    if (!u) return { locks: 0, structure: 0, lockers: 0, finalize: 0, entry: false };
+    const prog = THREE.MathUtils.clamp((u.assemblyProgress ?? u.progress ?? 0) / 100, 0, 1);
+    const t = u.mode === 'entry' ? 0 : u.currentIndex + prog;
+    const finalizeCompleted = finalizeIndex >= 0 && u.currentIndex > finalizeIndex;
+    const at = (icon) => {
+      const idx = stageIndex(icon);
+      if (idx < 0) return 0;
+      return THREE.MathUtils.clamp(t - idx, 0, 1);
+    };
+    return {
+      locks: u.mode === 'entry' ? 0.12 : at('locks'),
+      structure: at('shelves'),
+      lockers: at('lockers'),
+      finalize: finalizeCompleted ? 1 : at('finalize'),
+      entry: u.mode === 'entry',
+    };
+  };
+  const lead = fractionsForUnit(leadUnit);
+  const trail = fractionsForUnit(trailUnit);
+  const modFr = (moduleIndex) => (moduleIndex === 1 ? trail : lead);
+  // Wartosci "wspolne" (podstawa) ida za liderem.
+  const locksBuild = lead.locks;
+  const structureBuild = lead.structure;
+  const lockersBuild = lead.lockers;
+  const finalizeBuild = lead.finalize;
+
   parts.troughParts.forEach((part, index) => {
-    const progress = smooth(trayProgress * parts.troughParts.length - index * 0.32);
-    setPartOpacity(part, progress * troughVisibility);
-    part.scale.z = 0.72 + progress * 0.28;
+    const fr = modFr(index);
+    const trayProgress = smooth(fr.locks / 0.12);
+    setPartOpacity(part, trayProgress * (1 - smooth(fr.lockers)));
+    part.scale.z = 0.72 + trayProgress * 0.28;
   });
-  const lockRailVisibility = 1 - smooth(lockersBuild);
-  parts.lockRails.forEach((rail) => {
-    setPartOpacity(rail, smooth((locksBuild - 0.05) / 0.15) * lockRailVisibility);
+  parts.lockRails.forEach((rail, index) => {
+    const fr = modFr(index);
+    setPartOpacity(rail, smooth((fr.locks - 0.05) / 0.15) * (1 - smooth(fr.lockers)));
   });
 
-  const lockTimeline = Math.max(0, (locksBuild - 0.14) / 0.86) * LOCK_COUNT;
   parts.locks.forEach((lock, index) => {
-    const rawProgress = THREE.MathUtils.clamp(lockTimeline - index, 0, 1);
+    const m = index < LOCKS_PER_MODULE ? 0 : 1;
+    const fr = modFr(m);
+    const localIndex = index - m * LOCKS_PER_MODULE;
+    const lockTimeline = Math.max(0, (fr.locks - 0.14) / 0.86) * LOCKS_PER_MODULE;
+    const rawProgress = THREE.MathUtils.clamp(lockTimeline - localIndex, 0, 1);
     const progress = smooth(rawProgress);
     const matchingLockerProgress = smooth(
-      THREE.MathUtils.clamp(lockersBuild * LOCKER_COUNT - index, 0, 1),
+      THREE.MathUtils.clamp(fr.lockers * LOCKS_PER_MODULE - localIndex, 0, 1),
     );
     const visibleProgress = progress * (1 - matchingLockerProgress);
     lock.visible = visibleProgress > 0.01;
@@ -2165,16 +2226,17 @@ function updateTwoPartLockerModel(group, unit, stage, time, stages) {
       + wall.userData.entryDirection * (1 - progress) * 0.12;
   };
 
-  const firstWalls = parts.sideWalls.filter((wall) => wall.userData.phase === 'first');
-  const firstWallTimeline = Math.max(0, Math.min((structureBuild - 0.2) / 0.16, 1)) * firstWalls.length;
-  firstWalls.forEach((wall, index) => {
-    const progress = smooth(THREE.MathUtils.clamp(firstWallTimeline - index, 0, 1));
-    animateWall(wall, progress);
+  parts.sideWalls.filter((wall) => wall.userData.phase === 'first').forEach((wall) => {
+    const fr = modFr(wall.userData.moduleIndex ?? 0);
+    animateWall(wall, smooth(THREE.MathUtils.clamp((fr.structure - 0.2) / 0.16, 0, 1)));
   });
 
-  const shelfTimeline = Math.max(0, (structureBuild - 0.36) / 0.46) * parts.shelves.length;
   parts.shelves.forEach((shelf, index) => {
-    const rawProgress = THREE.MathUtils.clamp(shelfTimeline - index, 0, 1);
+    const m = index < LOCKS_PER_MODULE ? 0 : 1;
+    const fr = modFr(m);
+    const localIndex = index - m * LOCKS_PER_MODULE;
+    const shelfTimeline = Math.max(0, (fr.structure - 0.36) / 0.46) * LOCKS_PER_MODULE;
+    const rawProgress = THREE.MathUtils.clamp(shelfTimeline - localIndex, 0, 1);
     const progress = smooth(rawProgress);
     setPartOpacity(shelf, progress);
     shelf.position.y = shelf.userData.targetY + (1 - progress) * 0.95;
@@ -2187,9 +2249,9 @@ function updateTwoPartLockerModel(group, unit, stage, time, stages) {
     }
   });
 
-  const backWallTimeline = Math.max(0, (structureBuild - 0.7) / 0.16) * parts.backWalls.length;
   parts.backWalls.forEach((backWall, index) => {
-    const rawProgress = THREE.MathUtils.clamp(backWallTimeline - index, 0, 1);
+    const fr = modFr(index);
+    const rawProgress = THREE.MathUtils.clamp((fr.structure - 0.7) / 0.16, 0, 1);
     const progress = smooth(rawProgress);
     setPartOpacity(backWall, progress);
     // Sciana tylnia wjezdza WYRAZNIE OD DOLU (zeby skrytki montowac od gory) i
@@ -2199,16 +2261,16 @@ function updateTwoPartLockerModel(group, unit, stage, time, stages) {
     backWall.rotation.x = TUNE.backWallRotX; // utrzymaj obrot (nie zerowac!)
   });
 
-  const secondWalls = parts.sideWalls.filter((wall) => wall.userData.phase === 'second');
-  const secondWallTimeline = Math.max(0, Math.min((structureBuild - 0.82) / 0.18, 1)) * secondWalls.length;
-  secondWalls.forEach((wall, index) => {
-    const progress = smooth(THREE.MathUtils.clamp(secondWallTimeline - index, 0, 1));
-    animateWall(wall, progress);
+  parts.sideWalls.filter((wall) => wall.userData.phase === 'second').forEach((wall) => {
+    const fr = modFr(wall.userData.moduleIndex ?? 0);
+    animateWall(wall, smooth(THREE.MathUtils.clamp((fr.structure - 0.82) / 0.18, 0, 1)));
   });
 
-  const lockerTimeline = lockersBuild * LOCKER_COUNT;
   parts.lockerCells.forEach((cell, index) => {
-    const rawProgress = THREE.MathUtils.clamp(lockerTimeline - index, 0, 1);
+    const m = index < LOCKS_PER_MODULE ? 0 : 1;
+    const fr = modFr(m);
+    const localIndex = index - m * LOCKS_PER_MODULE;
+    const rawProgress = THREE.MathUtils.clamp(fr.lockers * LOCKS_PER_MODULE - localIndex, 0, 1);
     const progress = smooth(rawProgress);
     cell.visible = progress > 0.01;
     cell.position.x = (1 - progress) * cell.userData.entryX;
@@ -2228,43 +2290,44 @@ function updateTwoPartLockerModel(group, unit, stage, time, stages) {
   // podstawe i ZOSTAJE (wyrazny postoj), dopiero potem druga polowa nadjezdza
   // i dolacza obok. Pozycje docelowe (finalX/finalZ) pozostaja nietkniete -
   // wynikaja z jednej ramy CAD, wiec polowy skladaja sie idealnie w calosc.
+  // PRZEBUDOWA: kazdy modul jest WYSRODKOWANY w swoim modelu (na pozycji swojej
+  // polowy na tasmie) - bez sztucznego przesuniecia travelOffset. Stoi pionowo
+  // wg swojej frakcji finalize. Na podstawie obie polowy sa w tym samym
+  // miejscu (oba modele na tej samej pozie), wiec laczą sie wg CAD-X.
+  const centeredZ = ASSEMBLY_HALF_LENGTH; // content.z = -ASSEMBLY_HALF_LENGTH => srodek modelu
   parts.moduleRoots.forEach((root) => {
     const isFirstModule = root.userData.moduleIndex === 0;
-    // 1. polowa: szybkie podniesienie i ustawienie, potem dlugi postoj.
-    // 2. polowa: startuje znacznie pozniej (czas oczekiwania widoczny w scenie).
-    const liftProgress = isFirstModule
-      ? smooth((finalizeBuild - 0.08) / 0.22)
-      : smooth((finalizeBuild - 0.52) / 0.22);
-    const joinProgress = isFirstModule
-      ? smooth((finalizeBuild - 0.20) / 0.11)
-      : smooth((finalizeBuild - 0.64) / 0.11);
-    // Dodatkowy odstep miedzy polowkami (TUNE.halfGapX) - przeciw nachodzeniu.
+    const fr = modFr(root.userData.moduleIndex);
+    const liftProgress = smooth((fr.finalize - 0.1) / 0.35);
+    const joinProgress = smooth((fr.finalize - 0.5) / 0.25);
     const gap = (TUNE.halfGapX ?? 0) * (isFirstModule ? 0.5 : -0.5);
-    // Pionowe dociagniecie stojacych kolumn (TUNE.columnSettleY) - gdy lewituja.
     const settle = (TUNE.columnSettleY ?? 0) * joinProgress;
     root.rotation.x = Math.PI * 0.5 * liftProgress;
     root.position.x = THREE.MathUtils.lerp(root.userData.startX, root.userData.finalX, joinProgress) + gap;
     root.position.y = settle;
-    root.position.z = THREE.MathUtils.lerp(root.userData.travelZ, root.userData.finalZ, joinProgress);
+    root.position.z = centeredZ;
   });
 
-  const centerProgress = smooth((finalizeBuild - 0.78) / 0.08);
+  // Laczenie, plecy, dach i daszek pojawiaja sie wzgledem DRUGIEJ (pozniejszej)
+  // polowy - czyli dopiero gdy OBIE czesci stoja juz na podstawie.
+  const lateFinalize = trail.finalize;
+  const centerProgress = smooth((lateFinalize - 0.78) / 0.08);
   setPartOpacity(parts.centerJoin, centerProgress);
   parts.centerJoin.position.y = parts.centerJoin.userData.targetY + (1 - centerProgress) * 0.65;
 
-  const backProgress = smooth((finalizeBuild - 0.8) / 0.08);
+  const backProgress = smooth((lateFinalize - 0.8) / 0.08);
   setPartOpacity(parts.backPanel, backProgress);
   parts.backPanel.position.y = parts.backPanel.userData.targetY;
   parts.backPanel.position.z = parts.backPanel.userData.targetZ + (1 - backProgress) * 1.15;
   parts.backPanel.rotation.y = (1 - backProgress) * 0.08;
 
   parts.roofs.forEach((roof, index) => {
-    const progress = smooth((finalizeBuild - (0.84 + index * 0.025)) / 0.135);
+    const progress = smooth((lateFinalize - (0.84 + index * 0.025)) / 0.135);
     setPartOpacity(roof, progress);
     roof.position.y = roof.userData.targetY + (1 - progress) * 0.85;
   });
   parts.roofFascias.forEach((fascia, index) => {
-    const progress = smooth((finalizeBuild - (0.86 + index * 0.025)) / 0.115);
+    const progress = smooth((lateFinalize - (0.86 + index * 0.025)) / 0.115);
     setPartOpacity(fascia, progress);
     fascia.position.y = fascia.userData.targetY + (1 - progress) * 0.7;
   });
@@ -2273,16 +2336,34 @@ function updateTwoPartLockerModel(group, unit, stage, time, stages) {
   // stozki i wygladaly na blad. Postoj/oczekiwanie pokazujemy sama animacja.
   parts.warningLight.visible = false;
   parts.warningGlow.intensity = 0;
+
+  // === Pokazujemy tylko JEDNA polowe (osobne obiekty na tasmie) ===
+  // 'lead' = modul 0 + podstawa/dach/daszek/laczenie (czolo paczkomatu).
+  // 'trail' = tylko modul 1 (ogon - ten sam paczkomat opozniony w czasie).
+  const sharedFinal = [parts.base, parts.baseFront, parts.backPanel, parts.centerJoin];
+  if (halfMode === 'trail') {
+    parts.moduleRoots[0].visible = false;
+    parts.moduleRoots[1].visible = true;
+    sharedFinal.forEach((p) => { if (p) p.visible = false; });
+    parts.roofs.forEach((r) => { r.visible = false; });
+    parts.roofFascias.forEach((f) => { f.visible = false; });
+  } else {
+    parts.moduleRoots[0].visible = true;
+    parts.moduleRoots[1].visible = false;
+    sharedFinal.forEach((p) => { if (p) p.visible = true; });
+    parts.roofs.forEach((r) => { r.visible = true; });
+    parts.roofFascias.forEach((f) => { f.visible = true; });
+  }
 }
 
-function ThreeProductionScene({ stages, visibleUnits }) {
+function ThreeProductionScene({ stages, visibleUnits, trailUnits }) {
   const mountRef = useRef(null);
   const controlsRef = useRef(null);
-  const latestRef = useRef({ stages, visibleUnits });
+  const latestRef = useRef({ stages, visibleUnits, trailUnits });
   const [cadModelStatus, setCadModelStatus] = useState('loading');
   const [stageOneModelStatus, setStageOneModelStatus] = useState('loading');
 
-  latestRef.current = { stages, visibleUnits };
+  latestRef.current = { stages, visibleUnits, trailUnits };
 
   const zoomCamera = (factor) => {
     const controls = controlsRef.current;
@@ -2381,6 +2462,7 @@ function ThreeProductionScene({ stages, visibleUnits }) {
     scene.add(unitGroup);
 
     const lockers = new Map();
+    const trailLockers = new Map(); // #4: druga (opozniona) polowa kazdego paczkomatu
     const cadLockers = new Map();
     const rollers = [];
     const stationWorkers = [];
@@ -2895,6 +2977,8 @@ function ThreeProductionScene({ stages, visibleUnits }) {
       };
       lockers.forEach((model) => unitGroup.remove(model));
       lockers.clear();
+      trailLockers.forEach((model) => unitGroup.remove(model));
+      trailLockers.clear();
       setStageOneModelStatus('ready');
 
       // === Opcjonalny model polek + drzwi (drop-in) ===
@@ -2930,6 +3014,8 @@ function ThreeProductionScene({ stages, visibleUnits }) {
         );
         lockers.forEach((model) => unitGroup.remove(model));
         lockers.clear();
+        trailLockers.forEach((model) => unitGroup.remove(model));
+        trailLockers.clear();
         console.info('Podpieto model polek + drzwi z GLB.');
       }).catch(() => {
         // Brak pliku - OK, korzystamy z proceduralnych zaslepek.
@@ -2991,49 +3077,65 @@ function ThreeProductionScene({ stages, visibleUnits }) {
       }
 
       const activeNumbers = new Set();
-      latestRef.current.visibleUnits.forEach((unit) => {
-        activeNumbers.add(unit.key);
-        let model = lockers.get(unit.key);
-        if (!model) {
-          model = createTwoPartLockerModel(stageOneTemplates);
-          lockers.set(unit.key, model);
-          unitGroup.add(model);
-        }
+      const activeTrail = new Set();
+      const stagesNow = latestRef.current.stages;
+      const trailMap = new Map();
+      (latestRef.current.trailUnits ?? []).forEach((t) => trailMap.set(t.key, t));
 
-        const pose = getUnitPose(unit, routePoints);
-        const stage = latestRef.current.stages[unit.currentIndex];
+      // Ustawia jedna POLOWE: poseUnit decyduje o pozycji na tasmie, leadUnit i
+      // trailUnit o montazu obu modulow, halfMode o tym, ktora polowa jest
+      // pokazana ('lead' = modul 0 + dach/podstawa, 'trail' = modul 1).
+      const placeHalf = (model, poseUnit, leadUnit, trailUnit, halfMode) => {
+        const pose = getUnitPose(poseUnit, routePoints);
+        const stage = stagesNow[poseUnit.currentIndex];
         const isHorizontalAssembly = ['locks', 'shelves', 'back', 'door', 'lockers', 'finalize'].includes(stage?.icon);
-        // Podniesienie montazu, zeby czesci lezaly NA rolotoku, a nie w nim.
-        // Faza pozioma (zamki/sciany/polki/drzwi) byla zatopiona w rolkach.
-        // Faza "finalize" (stawianie pionowe) zostaje na poziomie podstawy.
         const isStandingStage = stage?.icon === 'finalize';
-        // Faza stojaca: opuszczamy caly paczkomat o TUNE.standingY, zeby podstawa
-        // siadla na tasmociagu (a nie lewitowala). Faza pozioma: lekkie uniesienie.
         const conveyorLift = isStandingStage ? TUNE.standingY : 0.34;
         model.visible = true;
         model.position.copy(pose.position);
         model.position.y = isHorizontalAssembly
           ? MODEL_LINE_Y + conveyorLift
-          : MODEL_LINE_Y + conveyorLift + Math.sin(time * 2 + unit.number) * 0.018;
+          : MODEL_LINE_Y + conveyorLift + Math.sin(time * 2 + poseUnit.number) * 0.018;
         model.rotation.y += Math.atan2(Math.sin(pose.angle - model.rotation.y), Math.cos(pose.angle - model.rotation.y)) * 0.16;
-        model.scale.setScalar(unit.number === 1 ? 0.88 : 0.78);
-        updateTwoPartLockerModel(model, unit, stage, time, latestRef.current.stages);
+        model.scale.setScalar(0.88);
+        updateTwoPartLockerModel(model, leadUnit, trailUnit, time, stagesNow, halfMode);
+      };
 
-        // === Produkt koncowy = zlozony model ===
-        // Wczesniej pod koniec ostatniego etapu scena podmieniala zlozony
-        // paczkomat na pojedynczy, gladki model CAD (paczkomatopytmalny.glb),
-        // ktory jest jedna szara bryla bez detali - wygladalo to gorzej niz
-        // sam montaz i ukrywalo laczenie polowek. Zgodnie z zalozeniem
-        // "to co sie zlozy ma byc produktem koncowym" - zostawiamy zlozony
-        // model widoczny do konca. Podmiana CAD jest wylaczona.
+      latestRef.current.visibleUnits.forEach((unit) => {
+        activeNumbers.add(unit.key);
+        const trailUnit = trailMap.get(unit.key) ?? null;
+
+        // CZOLO (modul 0 + dach/podstawa) na biezacej pozycji jednostki.
+        let leadModel = lockers.get(unit.key);
+        if (!leadModel) {
+          leadModel = createTwoPartLockerModel(stageOneTemplates);
+          lockers.set(unit.key, leadModel);
+          unitGroup.add(leadModel);
+        }
+        placeHalf(leadModel, unit, unit, trailUnit, 'lead');
+
+        // OGON (modul 1) na pozycji TEJ SAMEJ jednostki sprzed halfDelaySeconds
+        // - czyli na prawdziwej, wczesniejszej stacji. Osobny obiekt.
+        if (trailUnit) {
+          activeTrail.add(unit.key);
+          let trailModel = trailLockers.get(unit.key);
+          if (!trailModel) {
+            trailModel = createTwoPartLockerModel(stageOneTemplates);
+            trailLockers.set(unit.key, trailModel);
+            unitGroup.add(trailModel);
+          }
+          placeHalf(trailModel, trailUnit, unit, trailUnit, 'trail');
+        }
+
         const cadModel = cadLockers.get(unit.key);
         if (cadModel) cadModel.visible = false;
       });
 
       lockers.forEach((model, number) => {
-        if (!activeNumbers.has(number)) {
-          model.visible = false;
-        }
+        if (!activeNumbers.has(number)) model.visible = false;
+      });
+      trailLockers.forEach((model, number) => {
+        if (!activeTrail.has(number)) model.visible = false;
       });
       cadLockers.forEach((model, number) => {
         if (!activeNumbers.has(number)) {
@@ -3171,4 +3273,332 @@ function ThreeProductionScene({ stages, visibleUnits }) {
   return (
     <div className="three-scene">
       <div className="zoom-controls" aria-label="Kontrola przyblizenia sceny 3D">
-        <button type="button" onClick={() => zoomCamera(1.2)} title="Oddal kamere
+        <button type="button" onClick={() => zoomCamera(1.2)} title="Oddal kamere">
+          <ZoomOut size={17} />
+        </button>
+        <button type="button" onClick={() => zoomCamera(0.82)} title="Przybliz kamere">
+          <ZoomIn size={17} />
+        </button>
+        <button
+          type="button"
+          onClick={() => controlsRef.current?.reset()}
+          title="Resetuj pozycje kamery"
+        >
+          <RotateCcw size={17} />
+        </button>
+      </div>
+      <div
+        className={`cad-model-status ${cadModelStatus === 'error' || stageOneModelStatus === 'error' ? 'error' : cadModelStatus === 'ready' && stageOneModelStatus === 'ready' ? 'ready' : 'loading'}`}
+        data-cad-model-status={cadModelStatus}
+        data-stage-one-model-status={stageOneModelStatus}
+      >
+        <span />
+        {cadModelStatus === 'error' || stageOneModelStatus === 'error'
+          ? 'Model GLB niedostepny'
+          : cadModelStatus === 'ready' && stageOneModelStatus === 'ready'
+            ? 'Modele GLB aktywne'
+            : 'Ladowanie modeli GLB'}
+      </div>
+      <div className="three-scene-mount" ref={mountRef} />
+    </div>
+  );
+}
+
+function ProductionLine({ stages, visibleUnits, trailUnits, conveyorDuration, productionFinished }) {
+  const leadUnit = visibleUnits[0] ?? {
+    currentIndex: productionFinished ? Math.max(stages.length - 1, 0) : 0,
+    progress: productionFinished ? 100 : 0,
+    assemblyProgress: productionFinished ? 100 : 0,
+    number: 1,
+  };
+  const currentStage = stages[leadUnit.currentIndex] ?? (productionFinished ? stages[stages.length - 1] : stages[0]);
+  const isFinished = productionFinished;
+  const isEntryStage = leadUnit.mode === 'entry';
+  const displayStageName = isEntryStage ? 'Podanie pustych koryt' : currentStage?.name;
+  const displayStageColor = isEntryStage ? '#64748b' : currentStage?.color;
+  const installedLockCount = Math.min(
+    LOCK_COUNT,
+    Math.floor(((leadUnit.assemblyProgress ?? leadUnit.progress ?? 0) / 100) * LOCK_COUNT),
+  );
+  const installedLockerCount = Math.min(
+    LOCKER_COUNT,
+    Math.floor(((leadUnit.assemblyProgress ?? leadUnit.progress ?? 0) / 100) * LOCKER_COUNT),
+  );
+  const statusLabel = isFinished
+    ? 'Seria zakonczona'
+    : leadUnit.mode === 'completed'
+      ? 'Gotowy paczkomat'
+    : leadUnit.mode === 'entry'
+      ? 'Dojazd na montaz zamkow'
+    : leadUnit.isBlocked
+    ? 'Czeka na wolny etap'
+    : leadUnit.mode === 'travel'
+      ? 'Przejazd'
+      : 'Aktualny postoj';
+  const occupiedStages = new Set(
+    visibleUnits
+      .filter((unit) => unit.mode !== 'travel' && unit.mode !== 'entry')
+      .map((unit) => unit.currentIndex),
+  );
+
+  return (
+    <section className="visual-area">
+      <div className="visual-header">
+        <div>
+          <p className="eyebrow">Wizualizacja</p>
+          <h1>Linia produkcyjna paczkomatu</h1>
+        </div>
+        <div className="live-pill">
+          <span />
+          {isFinished ? 'Limit osiagniety' : 'Na zywo'}
+        </div>
+      </div>
+
+      <div className="conveyor-wrap">
+        <div className="stations">
+          <motion.div
+            className={`station stage-zero ${isEntryStage ? 'active occupied' : ''}`}
+            layout
+            style={{ '--stage-color': '#64748b' }}
+          >
+            <div className="station-icon">
+              <Box className="station-svg" aria-hidden="true" />
+            </div>
+            <span>0</span>
+            <strong>Podanie koryt</strong>
+            <small>{formatTime(ENTRY_TRAVEL_SECONDS)}</small>
+          </motion.div>
+          {stages.map((stage, index) => (
+            <motion.div
+              className={`station ${!isEntryStage && index === leadUnit.currentIndex ? 'active' : ''} ${occupiedStages.has(index) ? 'occupied' : ''}`}
+              key={stage.id}
+              layout
+              style={{ '--stage-color': stage.color }}
+            >
+              <div className="station-icon">
+                <StageIcon icon={stage.icon} className="station-svg" />
+              </div>
+              <span>{index + 1}</span>
+              <strong>{stage.name || 'Etap'}</strong>
+              <small>{formatTime(clampNumber(stage.duration))}</small>
+            </motion.div>
+          ))}
+        </div>
+
+        <div className="factory-floor scene-layout">
+          <ThreeProductionScene stages={stages} visibleUnits={visibleUnits} trailUnits={trailUnits} />
+        </div>
+
+        <div className="process-readout">
+          <div>
+            <span style={{ backgroundColor: displayStageColor }} />
+            <p>{statusLabel}</p>
+            <strong>{displayStageName || 'Etap'}</strong>
+          </div>
+          <div>
+            <p>
+              {currentStage?.icon === 'locks'
+                ? 'Zamki zamontowane'
+                : currentStage?.icon === 'lockers'
+                  ? 'Skrytki zamontowane'
+                  : 'Postep etapu'}
+            </p>
+            <strong>
+              {currentStage?.icon === 'locks'
+                ? `${isFinished ? LOCK_COUNT : installedLockCount}/${LOCK_COUNT}`
+                : currentStage?.icon === 'lockers'
+                  ? `${isFinished ? LOCKER_COUNT : installedLockerCount}/${LOCKER_COUNT}`
+                : isFinished
+                  ? '100%'
+                  : `${Math.round(leadUnit.assemblyProgress ?? leadUnit.progress)}%`}
+            </strong>
+          </div>
+          <div>
+            <p>Paczkomaty na linii</p>
+            <strong>{visibleUnits.length}</strong>
+          </div>
+          <div>
+            <p>Pelna petla animacji</p>
+            <strong>{formatTime(conveyorDuration)}</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function App() {
+  const [unitCount, setUnitCount] = useState(2);
+  const [stages, setStages] = useState(baseStages);
+  const [elapsed, setElapsed] = useState(0);
+  const [travelTimes, setTravelTimes] = useState(() => getDefaultTravelTimes(baseStages.length));
+  const [stopwatchRunning, setStopwatchRunning] = useState(false);
+  const [stopwatchElapsed, setStopwatchElapsed] = useState(0);
+  const stopwatchStartRef = useRef(0);
+  const stopwatchBaseRef = useRef(0);
+
+  const normalizedStages = useMemo(
+    () =>
+      stages.map((stage) => ({
+        ...stage,
+        duration: clampNumber(stage.duration),
+      })),
+    [stages],
+  );
+
+  const productionCount = Math.max(1, Math.floor(clampNumber(unitCount, 1)));
+  const normalizedTravelTimes = useMemo(
+    () => normalizeTravelTimes(travelTimes, normalizedStages.length),
+    [normalizedStages.length, travelTimes],
+  );
+  const productionSchedule = useMemo(
+    () => buildProductionSchedule(normalizedStages, productionCount, normalizedTravelTimes),
+    [normalizedStages, normalizedTravelTimes, productionCount],
+  );
+  const cycleTime = productionSchedule.soloCycleTime;
+  const launchInterval = productionSchedule.launchInterval;
+  const totalTime = productionSchedule.totalTime;
+  const animationCycle = Math.max(totalTime, 1);
+
+  React.useEffect(() => {
+    let frame;
+    const start = performance.now();
+    setElapsed(0);
+
+    const tick = (now) => {
+      const rawSeconds = (now - start) / 1000;
+      const seconds = rawSeconds >= animationCycle ? animationCycle + 0.001 : rawSeconds;
+      setElapsed(seconds);
+      if (rawSeconds < animationCycle) {
+        frame = requestAnimationFrame(tick);
+      }
+    };
+
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [animationCycle, normalizedStages.length, productionCount]);
+
+  React.useEffect(() => {
+    setTravelTimes((current) => normalizeTravelTimes(current, normalizedStages.length));
+  }, [normalizedStages.length]);
+
+  React.useEffect(() => {
+    if (!stopwatchRunning) return undefined;
+
+    let frame;
+    stopwatchStartRef.current = performance.now();
+
+    const tick = (now) => {
+      setStopwatchElapsed(stopwatchBaseRef.current + (now - stopwatchStartRef.current) / 1000);
+      frame = requestAnimationFrame(tick);
+    };
+
+    frame = requestAnimationFrame(tick);
+
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [stopwatchRunning]);
+
+  const visibleUnits = useMemo(
+    () => getVisibleUnitsFromSchedule(productionSchedule, elapsed, normalizedStages.length),
+    [elapsed, normalizedStages.length, productionSchedule],
+  );
+  // #4 PRZEBUDOWA: druga polowa = stan paczkomatu sprzed halfDelaySeconds.
+  const trailUnits = useMemo(
+    () => getVisibleUnitsFromSchedule(
+      productionSchedule,
+      Math.max(elapsed - (TUNE.halfDelaySeconds ?? 0), 0),
+      normalizedStages.length,
+    ),
+    [elapsed, normalizedStages.length, productionSchedule],
+  );
+
+  const updateStage = (id, patch) => {
+    setStages((current) => current.map((stage) => (stage.id === id ? { ...stage, ...patch } : stage)));
+  };
+
+  const updateTravelTime = (index, value) => {
+    setTravelTimes((current) => {
+      const next = normalizeTravelTimes(current, normalizedStages.length);
+      next[index] = value;
+      return next;
+    });
+  };
+
+  const toggleStopwatch = () => {
+    if (stopwatchRunning) {
+      stopwatchBaseRef.current = stopwatchElapsed;
+      setStopwatchRunning(false);
+      return;
+    }
+
+    stopwatchBaseRef.current = stopwatchElapsed;
+    setStopwatchRunning(true);
+  };
+
+  const resetStopwatch = () => {
+    stopwatchBaseRef.current = 0;
+    stopwatchStartRef.current = performance.now();
+    setStopwatchElapsed(0);
+  };
+
+  const addStage = () => {
+    setStages((current) => [
+      ...current,
+      {
+        id: crypto.randomUUID(),
+        name: `Etap ${current.length + 1}`,
+        duration: 5,
+        color: '#0f766e',
+        icon: 'box',
+      },
+    ]);
+  };
+
+  const removeStage = (id) => {
+    setStages((current) => (current.length === 1 ? current : current.filter((stage) => stage.id !== id)));
+  };
+
+  const resetStages = () => {
+    setStages(baseStages.map((stage) => ({ ...stage, id: crypto.randomUUID() })));
+    setTravelTimes(getDefaultTravelTimes(baseStages.length));
+  };
+
+  return (
+    <main className="app-shell">
+      <Metrics
+        unitCount={unitCount}
+        setUnitCount={setUnitCount}
+        cycleTime={cycleTime}
+        totalTime={totalTime}
+        stages={normalizedStages}
+        launchInterval={launchInterval}
+        travelTimes={normalizedTravelTimes}
+        updateTravelTime={updateTravelTime}
+        stopwatch={{
+          elapsed: stopwatchElapsed,
+          running: stopwatchRunning,
+          toggle: toggleStopwatch,
+          reset: resetStopwatch,
+        }}
+      />
+      <ProductionLine
+        stages={normalizedStages}
+        visibleUnits={visibleUnits}
+        trailUnits={trailUnits}
+        conveyorDuration={animationCycle}
+        productionFinished={elapsed >= animationCycle}
+      />
+      <StageEditor
+        stages={stages}
+        updateStage={updateStage}
+        addStage={addStage}
+        removeStage={removeStage}
+        resetStages={resetStages}
+      />
+    </main>
+  );
+}
+
+createRoot(document.getElementById('root')).render(<App />);
