@@ -30,43 +30,39 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
-// Domyslny czas pracy kazdego etapu. Zmiana tej jednej wartosci ustawia czas
-// wszystkich etapow startowych oraz nowych etapow dodawanych w interfejsie.
-const DEFAULT_STAGE_SECONDS = 10;
-
 const baseStages = [
   {
     id: crypto.randomUUID(),
     name: 'Etap 0: podanie koryt',
-    duration: DEFAULT_STAGE_SECONDS,
+    duration: 2,
     color: '#475569',
     icon: 'trough',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 1: montaz zamków',
-    duration: DEFAULT_STAGE_SECONDS,
+    name: 'Etap 1: montaz 22 zamkow',
+    duration: 2,
     color: '#2563eb',
     icon: 'locks',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 2: sciany boczne, plecy i pólki',
-    duration: DEFAULT_STAGE_SECONDS,
+    name: 'Etap 2: sciany boczne i polki',
+    duration: 2,
     color: '#0891b2',
     icon: 'shelves',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 3: montaz skrytek',
-    duration: DEFAULT_STAGE_SECONDS,
+    name: 'Etap 3: montaz 22 skrytek',
+    duration: 2,
     color: '#16a34a',
     icon: 'lockers',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 4: połączenie, podstawa i dachy',
-    duration: DEFAULT_STAGE_SECONDS,
+    name: 'Etap 4: polaczenie, plecy i dachy',
+    duration: 2,
     color: '#7c3aed',
     icon: 'finalize',
   },
@@ -127,9 +123,6 @@ const MIN_TRAVEL_SECONDS = 3.2;
 const ENTRY_TRAVEL_SECONDS = 2;
 const ENTRY_CONVEYOR_LENGTH = 5.8;
 const COMPLETED_DISPLAY_SECONDS = 5;
-// Pracownicy pozostaja w scenie i w kodzie, ale sa tymczasowo niewidoczni.
-// Zmien na true, aby ponownie ich pokazac.
-const SHOW_WORKERS = false;
 // === JEDNO zrodlo prawdy dla liczby skrytek na polowe paczkomatu ===
 // Zakres docelowy 10 / 11 / 12. Ta liczba musi sie zgadzac z modelem
 // polek + drzwi (polkiorazdrzwi.glb). Zmiana tylko tej jednej wartosci
@@ -196,7 +189,7 @@ const TUNE = {
   partTrailBuffer: -9,
   // Rozstaw stacji = DLUGOSC ROLOTOKU i odstepy miedzy czesciami. Domyslnie
   // bylo 7.6; zwieksz, gdy czesci na siebie nachodza (np. 12, 14, 16).
-  stationSpacing: 13,
+  stationSpacing: 20,
   // Dodatkowy bezpieczny luz ponad dlugosc polowy paczkomatu. Harmonogram
   // przelicza go na czas potrzebny do fizycznego zwolnienia stacji.
   partSafetyGap: 0.6,
@@ -209,10 +202,6 @@ const TUNE = {
   halfGapX: 0,
   // Pionowe dociagniecie stojacych kolumn (ujemne = nizej, gdy lewituja).
   columnSettleY: 0,
-  // Przeswit drugiej polowy podczas dojazdu nad podstawe. Najpierw konczy ona
-  // ruch w bok, a dopiero potem lagodnie opada na docelowa wysokosc. Zapobiega
-  // to przenikaniu kolumny przez geometrie podstawy w trakcie laczenia.
-  secondHalfApproachLift: 0.32,
   // Wysokosc CALEGO stojacego paczkomatu (podstawa + kolumny) wzgledem linii.
   // Ujemne opuszcza go, zeby PODSTAWA siadla na tasmociagu, a nie lewitowala.
   standingY: -0.4,
@@ -261,40 +250,59 @@ const TUNE = {
     '1-first': [0, 0, 0],
     '1-second': [0, 0, 0],
   },
+  // === BUFOR NA ROLOTOKU (wizualny odcinek przelotowy) ===
+  // Wydluza tasme miedzy etapami, tworzac pusty odcinek bufora obok Strefy
+  // napraw, przez ktory elementy po prostu przejezdzaja. NIE zmienia logiki
+  // skladania - przesuwa tylko geometrie stacji (i stref) za buforem.
+  bufferSegment: {
+    enabled: true,
+    afterStage: 2,    // bufor po tym etapie (2 = Montaz pionow), przed nastepnym
+    extraLength: 9,   // dodatkowa dlugosc rolotoku (swiat) = dlugosc bufora
+    planPx: 99999,    // wylaczone: px->swiat liniowo wszedzie (edytor jest WYSIWYG)
+  },
+  // === ZAGESZCZENIE WCZESNYCH ETAPOW ===
+  // Skraca odstep miedzy poczatkowymi etapami. 'untilStage' zostaje na miejscu,
+  // a wczesniejsze etapy dosuwaja sie do niego odstepem 'spacing'. Reszta linii
+  // (bufor, pozniejsze stacje, strefy) bez zmian.
+  tightEarly: {
+    untilStage: 2,  // etapy <= tego sa zageszczone (2 = etapy 0,1,2 blizej siebie)
+    spacing: 15,    // odstep miedzy wczesnymi etapami (pelny stationSpacing = 20)
+  },
+  // === STREFY HALI (sektory wg planu od przelozonego) ===
+  // Koloruje i opisuje obszary robocze wokol linii. Pozniej w wybrane strefy
+  // wstawimy modele pracownikow - kazda strefa ma gotowy pusty 'sectorSlot'.
+  sectors: {
+    show: true,        // wlacz / wylacz wszystkie strefy
+    opacity: 0.22,     // przezroczystosc kolorowego wypelnienia (0-1)
+    width: 3.6,        // szerokosc strefy w poprzek linii (X)
+    depth: 3.0,        // glebokosc strefy wzdluz linii (Z)
+    outward: 1.1,      // dodatkowe odsuniecie strefy na zewnatrz od operatora
+    labelHeight: 1.55, // wysokosc unoszacej etykiety nad podloga
+    // --- powierzchnia hali ---
+    floorWidth: 46,    // szerokosc podlogi hali w poprzek linii (X)
+    floorDepthPad: 58, // zapas dlugosci podlogi wzdluz linii (Z)
+    floorCenterX: -6,  // przesuniecie srodka podlogi (plan ma wiecej stref na dole)
+    // --- mapowanie PLANU hali na swiat (strefy peryferyjne) ---
+    // Kazdy sektor ma w danych pozycje z planu (px,py). Te liczby przeliczaja
+    // piksele planu na metry sceny. planCX/planCY = srodek planu (os = linia).
+    planCX: 515,
+    planCY: 180,
+    planZScale: 0.07,   // wzdluz linii: wieksze = strefy bardziej rozsuniete
+    planXScale: 0.07,   // w poprzek = wzdluz (jednolita skala -> ksztalty jak w planie)
+    planGap: 1.5,       // staly odstep stref od linii montazowej (cofa je od stanowisk)
+    // --- bufor podstaw (siatka miejsc na palety) ---
+    bufferPx: 1160,     // pozycja bufora w planie (px)
+    bufferPy: 85,       // pozycja bufora w planie (py)
+    bufferCols: 4,      // liczba miejsc wzdluz
+    bufferRows: 2,      // liczba miejsc w poprzek
+    bufferCell: 3.8,    // rozmiar jednego miejsca na palete
+  },
 };
 // =====================================================================
 const ASSEMBLY_LENGTH = 4.8;
 const ASSEMBLY_HALF_LENGTH = ASSEMBLY_LENGTH / 2;
 const ASSEMBLY_ITEM_SPACING = 0.4;
-// Wspolna skala calego paczkomatu. Jest nakladana na nadrzedna grupe, wiec
-// wszystkie czesci oraz ich lokalne przesuniecia animacji rosna proporcjonalnie.
-// 1.06 daje ok. 20% wiekszy model niz poprzednie 0.88 i nadal zostawia zapas
-// na rolotoku o szerokosci CONVEYOR_WIDTH.
-const MODEL_RENDER_SCALE = 1.06;
-// Druga polowa jest osobnym modelem jadacym ta sama osia co pierwsza. Na
-// ostatniej stacji musi najpierw zejsc z tej osi na swoja strone, inaczej
-// podczas stawiania przechodzi przez pierwsza kolumne i podstawe.
-const SECOND_HALF_SIDE_CLEARANCE = 1.7;
-const DEFAULT_TROUGH_LYING_POSE = {
-  rotationX: 0,
-  rotationY: 0,
-  rotationZ: 0,
-  offsetX: 1.04,
-  offsetY: 0.7,
-  offsetZ: 0,
-};
-const createDefaultTroughLyingPoses = () => Array.from(
-  { length: MODULE_COUNT },
-  (_, index) => (
-    index === 0
-      ? { ...DEFAULT_TROUGH_LYING_POSE }
-      : {
-          ...DEFAULT_TROUGH_LYING_POSE,
-          rotationZ: 180,
-          offsetY: -1.64,
-        }
-  ),
-);
+const MODEL_RENDER_SCALE = 0.88;
 const LOCK_TROUGH_MODEL_URL = '/models/components/lock-trough.glb';
 const CENTER_TROUGH_MODEL_URL = '/models/components/trough-center.glb';
 const SMALL_TROUGH_LEFT_MODEL_URL = '/models/components/small-trough-left.glb';
@@ -325,12 +333,26 @@ const CONVEYOR_SURFACE_Y = CONVEYOR_ELEVATION + 0.55;
 const buildLinePoints = (count) => {
   // Rozstaw stacji = dlugosc rolotoku. Wiekszy = dluzsza tasma i wieksze
   // odstepy miedzy czesciami (zeby nie nachodzily). Strojone przez TUNE.
+  const n = Math.max(count, 1);
   const spacing = TUNE.stationSpacing ?? 7.6;
-  const startZ = -((Math.max(count, 1) - 1) * spacing) / 2;
+  const startZ = -((n - 1) * spacing) / 2;
+  // Bufor: dodatkowa dlugosc rolotoku po etapie 'afterStage'. Czas/logika
+  // sa niezmienione - to tylko geometria.
+  const buf = TUNE.bufferSegment ?? {};
+  const bufExtra = (buf.enabled ?? false) ? (buf.extraLength ?? 0) : 0;
+  const bufAfter = buf.afterStage ?? -1;
+  // Pozycja "bazowa" (rownomierna) etapu i.
+  const base = (i) => startZ + i * spacing + (i > bufAfter ? bufExtra : 0);
+  // Zageszczenie wczesnych etapow: 'untilStage' (anchor) zostaje na miejscu,
+  // a wczesniejsze etapy dosuwaja sie do niego mniejszym odstepem 'spacing'.
+  const tight = TUNE.tightEarly ?? {};
+  const anchor = Math.min(tight.untilStage ?? -1, n - 1);
+  const tightSpacing = tight.spacing ?? spacing;
 
-  return Array.from({ length: count }, (_, index) => (
-    new THREE.Vector3(0, 0.55, startZ + index * spacing)
-  ));
+  return Array.from({ length: n }, (_, i) => {
+    const z = i >= anchor ? base(i) : base(anchor) - (anchor - i) * tightSpacing;
+    return new THREE.Vector3(0, 0.55, z);
+  });
 };
 
 const easeOut = (value) => 1 - Math.pow(1 - value, 3);
@@ -1202,6 +1224,241 @@ function makeTextPlane(width, height, draw) {
   return plane;
 }
 
+// Pomocniczy zaokraglony prostokat na canvasie etykiety strefy.
+function sectorRoundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// Etykiety i czasy stacji linii glownej wg planu hali (indeks = nasz etap 0-4).
+const MAINLINE_SECTORS = [
+  { label: 'Podmontaż koryta', minutes: 9 },
+  { label: 'Montaż zamków', minutes: null },
+  { label: 'Montaż pionów', minutes: 15 },
+  { label: 'Montaż drzwi', minutes: 12 },
+  { label: 'Montaż finalny', minutes: 16 },
+];
+
+// Buduje jedna strefe robocza: plaski kolorowy pad + obrys + unoszaca etykieta
+// + pusty 'sectorSlot' (kotwica na przyszle modele pracownikow). Pozycje ustawia
+// wywolujacy. Zwraca Group; slot dostepny przez group.userData.sectorSlot.
+function createSectorZone({
+  label,
+  sublabel = '',
+  color = '#2563eb',
+  width = 3.6,
+  depth = 3.0,
+  opacity = 0.22,
+  labelHeight = 1.55,
+}) {
+  const group = new THREE.Group();
+  group.name = `sector:${label}`;
+
+  // Wypelnienie strefy (plaski, polprzezroczysty pad na podlodze).
+  const fill = new THREE.Mesh(
+    new THREE.PlaneGeometry(width, depth),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+    }),
+  );
+  fill.rotation.x = -Math.PI / 2;
+  fill.position.y = 0.025;
+  fill.renderOrder = 1;
+  group.add(fill);
+
+  // Obrys strefy (wyrazna ramka w kolorze sektora).
+  const hw = width / 2;
+  const hd = depth / 2;
+  const border = new THREE.LineLoop(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-hw, 0, -hd),
+      new THREE.Vector3(hw, 0, -hd),
+      new THREE.Vector3(hw, 0, hd),
+      new THREE.Vector3(-hw, 0, hd),
+    ]),
+    new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.92 }),
+  );
+  border.position.y = 0.045;
+  group.add(border);
+
+  // Unoszaca etykieta z nazwa sektora (dopasowana do glebokosci strefy).
+  const labelW = Math.max(1.1, Math.min(2.4, depth * 0.95));
+  const labelH = labelW / 2.667;
+  const plane = makeTextPlane(labelW, labelH, (ctx, canvas) => {
+    const pad = 8;
+    sectorRoundRect(ctx, pad, pad, canvas.width - pad * 2, canvas.height - pad * 2, 28);
+    ctx.fillStyle = 'rgba(15,23,42,0.84)';
+    ctx.fill();
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = color;
+    sectorRoundRect(ctx, pad, pad, canvas.width - pad * 2, canvas.height - pad * 2, 28);
+    ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 60px sans-serif';
+    ctx.fillText(label, canvas.width / 2, sublabel ? canvas.height / 2 - 24 : canvas.height / 2);
+    if (sublabel) {
+      ctx.font = '40px sans-serif';
+      ctx.fillStyle = '#cbd5e1';
+      ctx.fillText(sublabel, canvas.width / 2, canvas.height / 2 + 42);
+    }
+  });
+  plane.material.side = THREE.DoubleSide;
+  plane.rotation.y = Math.PI / 2; // czolem w poprzek linii (czytelne z domyslnej kamery)
+  plane.position.set(0, labelHeight, 0);
+  group.add(plane);
+
+  // Pusty slot na przyszle modele pracownikow (na srodku strefy).
+  const slot = new THREE.Group();
+  slot.name = 'sectorSlot';
+  group.userData.sectorSlot = slot;
+  group.add(slot);
+
+  return group;
+}
+
+// Kolory stref wg typu sektora.
+const SECTOR_COLORS = {
+  podmontaz: '#2563eb', // niebieski - stanowiska montazu podzespolow
+  komponent: '#d97706', // bursztynowy - podawanie komponentow / blach
+  magazyn: '#64748b',   // szary - palety, regaly, bufory
+  naprawa: '#dc2626',   // czerwony - strefa napraw
+  czystosc: '#16a34a',  // zielony - kaciki czystosci
+};
+
+// Strefy peryferyjne odwzorowane wg planu hali. Kazdy sektor ma pozycje z
+// rysunku: px = wzdluz linii (lewo->prawo), py = w poprzek (gora->dol),
+// pw/ph = rozmiar prostokata w planie (px). Przeliczane na swiat w
+// buildPeripheralSectors przez planCX/planCY/planZScale/planXScale.
+const PLAN_SECTORS = [
+  // Ustawione recznie w edytorze stref (edytor_stref.html).
+  { label: 'Paleta NOK', type: 'magazyn', px: 58, py: 75, pw: 73, ph: 70 },
+  { label: 'Kącik czystości', type: 'czystosc', px: 183, py: 77, pw: 39, ph: 46 },
+  { label: 'Półka', type: 'komponent', px: 232, py: 91, pw: 54, ph: 72 },
+  { label: 'Ściana', type: 'komponent', px: 296, py: 82, pw: 68, ph: 55 },
+  { label: 'Kant', type: 'komponent', px: 359, py: 82, pw: 58, ph: 55 },
+  { label: 'PFB drzwi', type: 'komponent', px: 489, py: 91, pw: 58, ph: 72 },
+  { label: 'Podmontaż drzwi', type: 'podmontaz', minutes: 12, px: 575, py: 82, pw: 110, ph: 55 },
+  { label: 'Drzwi', type: 'komponent', px: 658, py: 110, pw: 51, ph: 74 },
+  { label: 'Dachy', type: 'komponent', px: 889, py: 80, pw: 48, ph: 71 },
+  { label: 'Blendy', type: 'komponent', px: 940, py: 72, pw: 50, ph: 55 },
+  { label: 'Blacha koryta', type: 'komponent', px: 58, py: 272, pw: 73, ph: 55 },
+  { label: 'Regał elem. złączne', type: 'magazyn', px: 68, py: 400, pw: 93, ph: 140 },
+  { label: 'Paleta NOK', type: 'magazyn', px: 192, py: 435, pw: 55, ph: 70 },
+  { label: 'Półka', type: 'komponent', px: 260, py: 301, pw: 46, ph: 91 },
+  { label: 'Ściana', type: 'komponent', px: 319, py: 287, pw: 65, ph: 65 },
+  { label: 'Strefa napraw', type: 'naprawa', px: 455, py: 344, pw: 150, ph: 264 },
+  { label: 'Drzwi', type: 'komponent', px: 655, py: 265, pw: 51, ph: 88 },
+  { label: 'Kącik czystości', type: 'czystosc', px: 607, py: 286, pw: 38, ph: 48 },
+  { label: 'Podmontaż drzwi', type: 'podmontaz', minutes: 12, px: 594, py: 371, pw: 68, ph: 118 },
+  { label: 'PFB drzwi', type: 'komponent', px: 607, py: 454, pw: 91, ph: 40 },
+  { label: 'Podłoga', type: 'komponent', px: 755, py: 289, pw: 65, ph: 65 },
+  { label: 'Sufit', type: 'komponent', px: 824, py: 288, pw: 65, ph: 65 },
+  { label: 'Rama', type: 'komponent', px: 701, py: 437, pw: 52, ph: 66 },
+  { label: 'Podmontaż podłogi i sufitu', type: 'podmontaz', minutes: 16, px: 783, py: 443, pw: 110, ph: 55 },
+  { label: 'Klapa pokrywy', type: 'komponent', px: 884, py: 375, pw: 88, ph: 46 },
+  { label: 'Blacha dolna', type: 'komponent', px: 871, py: 439, pw: 64, ph: 66 },
+  { label: 'Paleta NOK', type: 'magazyn', px: 1055, py: 435, pw: 60, ph: 70 },
+  { label: 'Kącik czystości', type: 'czystosc', px: 1107, py: 448, pw: 40, ph: 40 },
+];
+
+// Bufor podstaw na koncu linii - strefa magazynowa z siatka miejsc na palety.
+function buildBufferGrid(group, xCenter, zCenter, s) {
+  const cols = s.bufferCols ?? 4;
+  const rows = s.bufferRows ?? 2;
+  const cell = s.bufferCell ?? 3.3;
+  const gap = 0.22;
+  const stepX = cell + gap;
+  const stepZ = cell + gap;
+  const totalX = rows * stepX - gap;
+  const totalZ = cols * stepZ - gap;
+  const zone = createSectorZone({
+    label: 'Bufor podstaw',
+    color: SECTOR_COLORS.magazyn,
+    width: totalX + 1.0,
+    depth: totalZ + 1.0,
+    opacity: 0.14,
+    labelHeight: s.labelHeight ?? 1.55,
+  });
+  zone.position.set(xCenter, 0.02, zCenter);
+
+  const cellMat = new THREE.LineBasicMaterial({
+    color: SECTOR_COLORS.magazyn,
+    transparent: true,
+    opacity: 0.85,
+  });
+  for (let r = 0; r < rows; r += 1) {
+    for (let c = 0; c < cols; c += 1) {
+      const cx = -totalX / 2 + r * stepX + cell / 2;
+      const cz = -totalZ / 2 + c * stepZ + cell / 2;
+      const h = cell / 2;
+      const loop = new THREE.LineLoop(
+        new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(cx - h, 0, cz - h),
+          new THREE.Vector3(cx + h, 0, cz - h),
+          new THREE.Vector3(cx + h, 0, cz + h),
+          new THREE.Vector3(cx - h, 0, cz + h),
+        ]),
+        cellMat,
+      );
+      loop.position.y = 0.05;
+      zone.add(loop);
+    }
+  }
+  group.add(zone);
+}
+
+// Rozklada strefy peryferyjne wg pozycji z planu hali (px,py -> swiat).
+function buildPeripheralSectors(group, routePoints, s) {
+  if (!routePoints.length) return;
+  const cx = s.planCX ?? 515;        // px srodka linii w planie
+  const cy = s.planCY ?? 180;        // py osi linii w planie
+  const zS = s.planZScale ?? 0.0627; // px planu -> swiat WZDLUZ linii
+  const xS = s.planXScale ?? 0.075;  // px planu -> swiat W POPRZEK linii
+  // py < cy (gora planu) -> +X; py > cy (dol planu) -> -X.
+  // planGap = staly odstep od linii na kazda strone (cofa strefy od stanowisk).
+  const gap = s.planGap ?? 0;
+  // Bufor na rolotoku: strefy planu o px > planPx przesuwaja sie z linia, zeby
+  // zostaly przy swoich stacjach za buforem (a nie wpadly w pusty odcinek).
+  const buf = TUNE.bufferSegment ?? {};
+  const bufExtra = (buf.enabled ?? false) ? (buf.extraLength ?? 0) : 0;
+  const bufPlanPx = buf.planPx ?? Infinity;
+  const toWorld = (px, py) => {
+    const raw = (cy - py) * xS;
+    const z = (px - cx) * zS + (px > bufPlanPx ? bufExtra : 0);
+    return { x: raw + (raw >= 0 ? gap : -gap), z };
+  };
+
+  PLAN_SECTORS.forEach((def) => {
+    const { x, z } = toWorld(def.px, def.py);
+    const zone = createSectorZone({
+      label: def.label,
+      sublabel: def.minutes ? `${def.minutes} min` : '',
+      color: SECTOR_COLORS[def.type] ?? SECTOR_COLORS.magazyn,
+      width: (def.ph ?? 60) * xS,  // w poprzek (X)
+      depth: (def.pw ?? 60) * zS,  // wzdluz (Z)
+      opacity: s.opacity ?? 0.22,
+      labelHeight: s.labelHeight ?? 1.45,
+    });
+    zone.position.set(x, 0.02, z);
+    zone.userData.sectorGroup = def.type;
+    group.add(zone);
+  });
+
+  // Bufor podstaw - siatka miejsc na palety (pozycja tez z planu).
+  const b = toWorld(s.bufferPx ?? 1160, s.bufferPy ?? 85);
+  buildBufferGrid(group, b.x, b.z, s);
+}
+
 function createLockerModel() {
   const group = new THREE.Group();
   group.scale.setScalar(0.76);
@@ -1947,8 +2204,6 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
 
   const moduleRoots = [];
   const troughAssemblies = [];
-  const troughComponents = [];
-  const lockPosePivots = [];
   const troughParts = [];
   const lockRails = [];
   const locks = [];
@@ -1987,7 +2242,6 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
 
     const troughAssembly = new THREE.Group();
     troughAssembly.name = `rotatingTroughAssembly-${moduleIndex + 1}`;
-    troughAssembly.userData.moduleIndex = moduleIndex;
     troughAssembly.position.set(stageOneTemplates ? 0 : 0.91, 0, 0);
     troughAssembly.rotation.z = stageOneTemplates ? 0 : -Math.PI / 2;
     content.add(troughAssembly);
@@ -2000,17 +2254,10 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
         ? [stageOneTemplates.centerTrough, stageOneTemplates.smallTroughLeft]
         : [stageOneTemplates.trough, stageOneTemplates.smallTroughRight];
       moduleTroughTemplates.forEach((template, componentIndex) => {
-        const componentPivot = new THREE.Group();
-        componentPivot.name = `troughComponentPivot-${moduleIndex + 1}-${componentIndex + 1}`;
-        componentPivot.userData.componentIndex = componentIndex;
-        componentPivot.userData.moduleIndex = moduleIndex;
-        componentPivot.userData.targetPosition = new THREE.Vector3();
         const troughModel = applyGlbMaterial(cloneGlbComponent(template), 'trough');
         troughModel.name = `glbTrough-${moduleIndex + 1}-${componentIndex + 1}`;
         troughModel.position.x = -moduleCenterX;
-        componentPivot.add(troughModel);
-        troughModelGroup.add(componentPivot);
-        troughComponents.push(componentPivot);
+        troughModelGroup.add(troughModel);
       });
       troughParts.push(troughModelGroup);
       troughAssembly.add(troughModelGroup);
@@ -2048,11 +2295,6 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
       }
     }
     const lockTargetY = stageOneTemplates ? -0.58 : 0;
-    const lockPosePivot = new THREE.Group();
-    lockPosePivot.name = `lockPosePivot-${moduleIndex + 1}`;
-    lockPosePivot.userData.moduleIndex = moduleIndex;
-    troughAssembly.add(lockPosePivot);
-    lockPosePivots.push(lockPosePivot);
 
     for (let row = 0; row < LOCKS_PER_MODULE; row += 1) {
       const rowZ = -2 + row * ASSEMBLY_ITEM_SPACING;
@@ -2088,37 +2330,8 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
         lock.userData.meshes = [housing, latch, pin];
       }
       locks.push(lock);
-      lockPosePivot.add(lock);
+      troughAssembly.add(lock);
     }
-
-    // Zmierz automatycznie korekte potrzebna po polozeniu calego zestawu
-    // (koryto + zamki) o 90 stopni. Zachowujemy srodek X i dolna krawedz Y,
-    // wiec zestaw lezy na rolkach zamiast obracac sie wokol przypadkowego
-    // punktu eksportu modelu GLB.
-    const troughTargetX = troughAssembly.position.x;
-    const troughTargetY = troughAssembly.position.y;
-    const measureTroughPose = (rotationZ) => {
-      troughAssembly.rotation.z = rotationZ;
-      troughAssembly.position.set(troughTargetX, troughTargetY, 0);
-      group.updateMatrixWorld(true);
-      const bounds = new THREE.Box3().setFromObject(troughAssembly);
-      const worldCenter = bounds.getCenter(new THREE.Vector3());
-      const localCenter = content.worldToLocal(worldCenter.clone());
-      const localBottom = content.worldToLocal(
-        new THREE.Vector3(worldCenter.x, bounds.min.y, worldCenter.z),
-      ).y;
-      return { centerX: localCenter.x, bottomY: localBottom };
-    };
-    const uprightTroughPose = measureTroughPose(0);
-    const lyingTroughPose = measureTroughPose(-Math.PI / 2);
-    troughAssembly.userData.targetX = troughTargetX;
-    troughAssembly.userData.targetY = troughTargetY;
-    troughAssembly.userData.lyingOffsetX = uprightTroughPose.centerX - lyingTroughPose.centerX;
-    troughAssembly.userData.lyingOffsetY = uprightTroughPose.bottomY - lyingTroughPose.bottomY;
-    troughAssembly.rotation.z = -Math.PI / 2;
-    troughAssembly.position.x = troughTargetX + troughAssembly.userData.lyingOffsetX;
-    troughAssembly.position.y = troughTargetY + troughAssembly.userData.lyingOffsetY;
-    group.updateMatrixWorld(true);
 
     const moduleWallTemplates = moduleIndex === 0
       ? { left: stageOneTemplates?.sideWallCenter, right: stageOneTemplates?.sideWallLeft }
@@ -2392,8 +2605,6 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
   group.userData.parts = {
     moduleRoots,
     troughAssemblies,
-    troughComponents,
-    lockPosePivots,
     troughParts,
     lockRails,
     locks,
@@ -2416,15 +2627,7 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
   return group;
 }
 
-function updateTwoPartLockerModel(
-  group,
-  leadUnit,
-  trailUnit,
-  time,
-  stages,
-  halfMode,
-  troughLyingPoses = createDefaultTroughLyingPoses(),
-) {
+function updateTwoPartLockerModel(group, leadUnit, trailUnit, time, stages, halfMode) {
   const parts = group.userData.parts;
   const stageIndex = (icon) => stages.findIndex((candidate) => candidate.icon === icon);
   const smooth = (value) => easeOut(THREE.MathUtils.clamp(value, 0, 1));
@@ -2452,10 +2655,8 @@ function updateTwoPartLockerModel(
       return THREE.MathUtils.clamp(t - idx, 0, 1);
     };
     return {
-      // Koryto jest gotowym nosnikiem od samego wejscia na linie. Nie zerujemy
-      // jego postepu po zatrzymaniu na etapie 0, bo powodowalo to skok skali
-      // 1 -> 0.72 -> 1 (pozorne kurczenie i ponowne rozciaganie).
-      trough: 1,
+      // Koryto jest nosnikiem od samego wejscia na linie (Etap 0).
+      trough: u.mode === 'entry' ? 1 : at('trough'),
       locks: at('locks'),
       structure: at('shelves'),
       lockers: at('lockers'),
@@ -2508,56 +2709,14 @@ function updateTwoPartLockerModel(
     });
   });
 
+  const troughTurnProgress = smooth(structureBuild / 0.2);
   parts.troughAssemblies.forEach((assembly) => {
-    const moduleIndex = assembly.userData.moduleIndex ?? 0;
-    const troughTurnProgress = smooth(modFr(moduleIndex).structure / 0.2);
-    // Etapy 0 i 1: zestaw lezy plasko. Dopiero poczatek etapu 2 podnosi
-    // koryto razem z zamontowanymi juz zamkami do pozycji pionowej.
-    const lyingAmount = 1 - troughTurnProgress;
-    assembly.rotation.set(0, 0, -Math.PI * 0.5 * lyingAmount);
-    assembly.position.x = THREE.MathUtils.lerp(
-      assembly.userData.targetX,
-      assembly.userData.targetX + assembly.userData.lyingOffsetX,
-      lyingAmount,
-    );
-    assembly.position.y = THREE.MathUtils.lerp(
-      assembly.userData.targetY,
-      assembly.userData.targetY + assembly.userData.lyingOffsetY,
-      lyingAmount,
-    );
-    assembly.position.z = 0;
-  });
-
-  // Knoby steruja bezposrednio DWOMA fizycznymi modelami koryt, a nie wspolnym
-  // pivotem polowy paczkomatu. Odpowiadajace sobie koryta obu polow korzystaja
-  // z tego samego zestawu korekt, ale nigdy nie obracaja drugiego typu koryta.
-  const applyLyingPose = (object, pose, troughTurnProgress) => {
-    const lyingAmount = 1 - troughTurnProgress;
-    object.rotation.set(
-      THREE.MathUtils.degToRad(pose.rotationX) * lyingAmount,
-      THREE.MathUtils.degToRad(pose.rotationY) * lyingAmount,
-      THREE.MathUtils.degToRad(pose.rotationZ) * lyingAmount,
-    );
-    object.position.set(
-      pose.offsetX * lyingAmount,
-      pose.offsetY * lyingAmount,
-      pose.offsetZ * lyingAmount,
-    );
-  };
-  parts.troughComponents.forEach((component) => {
-    const componentIndex = component.userData.componentIndex ?? 0;
-    const moduleIndex = component.userData.moduleIndex ?? 0;
-    const troughTurnProgress = smooth(modFr(moduleIndex).structure / 0.2);
-    const pose = troughLyingPoses[componentIndex] ?? DEFAULT_TROUGH_LYING_POSE;
-    applyLyingPose(component, pose, troughTurnProgress);
-  });
-  // Zamki sa montowane na pierwszym (wiekszym) korycie, dlatego przez etapy
-  // 0 i 1 dostaja dokladnie ten sam obrot i przesuniecie co Koryto 1.
-  const lockTroughPose = troughLyingPoses[0] ?? DEFAULT_TROUGH_LYING_POSE;
-  parts.lockPosePivots.forEach((pivot) => {
-    const moduleIndex = pivot.userData.moduleIndex ?? 0;
-    const troughTurnProgress = smooth(modFr(moduleIndex).structure / 0.2);
-    applyLyingPose(pivot, lockTroughPose, troughTurnProgress);
+    assembly.rotation.z = group.userData.usesStageOneGlb
+      ? 0
+      : -Math.PI * 0.5 * (1 - troughTurnProgress);
+    assembly.position.y = group.userData.usesStageOneGlb
+      ? 0
+      : THREE.MathUtils.lerp(-0.5, 0, troughTurnProgress);
   });
 
   const animateWall = (wall, progress) => {
@@ -2623,23 +2782,9 @@ function updateTwoPartLockerModel(
   });
 
   const baseProgress = smooth(finalizeBuild / 0.16);
-  // Cala grupa modelu schodzi z wysokosci poziomej (0.34) do standingY w
-  // trakcie pionowania. Podstawa jest jej dzieckiem, wiec bez kompensacji
-  // pojawialaby sie wysoko nad rolkami i opadala razem z rodzicem.
-  const baseParentLiftProgress = smooth((finalizeBuild - 0.1) / 0.35);
-  const currentParentLift = THREE.MathUtils.lerp(
-    0.34,
-    TUNE.standingY,
-    baseParentLiftProgress,
-  );
-  const baseWorldAnchorCompensation = (
-    TUNE.standingY - currentParentLift
-  ) / MODEL_RENDER_SCALE;
   [parts.base, parts.baseFront].forEach((part) => {
     setPartOpacity(part, baseProgress);
-    // Kompensujemy ruch nadrzednej grupy, dlatego pozycja SWIATOWA podstawy
-    // pozostaje stala od pierwszej widocznej klatki animacji.
-    part.position.y = part.userData.targetY + baseWorldAnchorCompensation;
+    part.position.y = part.userData.targetY - (1 - baseProgress) * 0.48;
   });
 
   // Sekwencja koncowa "jedna za druga": pierwsza polowa wstaje pionowo na
@@ -2656,27 +2801,11 @@ function updateTwoPartLockerModel(
     const fr = modFr(root.userData.moduleIndex);
     const liftProgress = smooth((fr.finalize - 0.1) / 0.35);
     const joinProgress = smooth((fr.finalize - 0.5) / 0.25);
-    // Druga polowa konczy dojazd w bok przed rozpoczeciem opuszczania. Wczesniej
-    // oba ruchy zachodzily jednoczesnie, przez co dol kolumny przecinal podstawe.
-    const secondHalfSlideProgress = smooth((fr.finalize - 0.5) / 0.18);
-    const secondHalfLandingProgress = smooth((fr.finalize - 0.68) / 0.12);
-    const horizontalProgress = isFirstModule ? joinProgress : secondHalfSlideProgress;
-    const landingProgress = isFirstModule ? joinProgress : secondHalfLandingProgress;
-    const uprightForLanding = smooth((fr.finalize - 0.38) / 0.12);
-    const approachLift = isFirstModule
-      ? 0
-      : (TUNE.secondHalfApproachLift ?? 0.32)
-        * uprightForLanding
-        * (1 - secondHalfLandingProgress);
     const gap = (TUNE.halfGapX ?? 0) * (isFirstModule ? 0.5 : -0.5);
-    const settle = (TUNE.columnSettleY ?? 0) * landingProgress;
+    const settle = (TUNE.columnSettleY ?? 0) * joinProgress;
     root.rotation.x = Math.PI * 0.5 * liftProgress;
-    root.position.x = THREE.MathUtils.lerp(
-      root.userData.startX,
-      root.userData.finalX,
-      horizontalProgress,
-    ) + gap;
-    root.position.y = settle + approachLift;
+    root.position.x = THREE.MathUtils.lerp(root.userData.startX, root.userData.finalX, joinProgress) + gap;
+    root.position.y = settle;
     root.position.z = centeredZ;
   });
 
@@ -2704,28 +2833,10 @@ function updateTwoPartLockerModel(
     fascia.position.y = fascia.userData.targetY + (1 - progress) * 0.7;
   });
 
-  // Alarm dotyczy tej konkretnej polowy, ktora czeka na zwolnienie stacji lub
-  // odcinka. Lampka jedzie razem z nosnikiem i gasnie natychmiast po ruszeniu.
-  const alarmUnit = halfMode === 'trail' ? trailUnit : leadUnit;
-  const isWaitingForClearance = Boolean(alarmUnit?.isBlocked);
-  parts.warningLight.visible = isWaitingForClearance;
-  if (isWaitingForClearance) {
-    // Pozycja nad poziomym korytem, blisko zewnetrznej strony danej polowy.
-    // Oczekiwanie nie wystepuje na finalnym, pionowym etapie.
-    parts.warningLight.position.set(
-      halfMode === 'trail' ? -0.9 : 0.9,
-      0.72,
-      -ASSEMBLY_HALF_LENGTH + 0.4,
-    );
-    const alarmPulse = 1 + Math.sin(time * 9) * 0.16;
-    parts.warningBulb.scale.setScalar(alarmPulse);
-    parts.warningBulb.material.emissiveIntensity = 1.8 + Math.sin(time * 10) * 0.55;
-    parts.warningGlow.intensity = 1.65 + Math.sin(time * 10) * 0.6;
-  } else {
-    parts.warningBulb.scale.setScalar(1);
-    parts.warningBulb.material.emissiveIntensity = 0;
-    parts.warningGlow.intensity = 0;
-  }
+  // Lampy ostrzegawcze wylaczone - unosily sie nad linia jako pomaranczowe
+  // stozki i wygladaly na blad. Postoj/oczekiwanie pokazujemy sama animacja.
+  parts.warningLight.visible = false;
+  parts.warningGlow.intensity = 0;
 
   // === Pokazujemy tylko JEDNA polowe (osobne obiekty na tasmie) ===
   // 'lead' = modul 0 + podstawa/dach/daszek/laczenie (czolo paczkomatu).
@@ -2757,7 +2868,6 @@ function ThreeProductionScene({
   const controlsRef = useRef(null);
   const latestRef = useRef({ stages, visibleUnits, trailUnits, scheduleConflictCount });
   const [stageOneModelStatus, setStageOneModelStatus] = useState('loading');
-  const troughLyingPosesRef = useRef(createDefaultTroughLyingPoses());
 
   latestRef.current = { stages, visibleUnits, trailUnits, scheduleConflictCount };
 
@@ -2781,7 +2891,7 @@ function ThreeProductionScene({
     const mount = mountRef.current;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color('#e7edf2');
-    scene.fog = new THREE.Fog('#e7edf2', 42, 96);
+    scene.fog = new THREE.Fog('#e7edf2', 70, 260);
 
     const camera = new THREE.PerspectiveCamera(52, 1, 0.1, 240);
     camera.position.set(0, 16, 24);
@@ -2889,9 +2999,7 @@ function ThreeProductionScene({
         const routeLength = Math.max(size.z, 8);
 
         if (lastFittedStageCount !== routePoints.length) {
-          // Blizszy domyslny kadr poprawia czytelnosc calego procesu bez
-          // zmieniania skali modeli, odstepow ani trajektorii animacji.
-          const cameraDistance = Math.max(12, routeLength * 0.96);
+          const cameraDistance = Math.max(14, routeLength * 1.12);
           controls.target.set(center.x, 0.75, center.z);
           camera.position.set(center.x + cameraDistance * 0.72, cameraDistance * 0.55, center.z - cameraDistance * 0.72);
           controls.minDistance = 7;
@@ -2902,8 +3010,11 @@ function ThreeProductionScene({
         }
 
         floor.geometry.dispose();
-        floor.geometry = new THREE.PlaneGeometry(CONVEYOR_WIDTH + 16, routeLength + 17);
-        floor.position.x = center.x;
+        floor.geometry = new THREE.PlaneGeometry(
+          TUNE.sectors?.floorWidth ?? (CONVEYOR_WIDTH + 16),
+          routeLength + (TUNE.sectors?.floorDepthPad ?? 17),
+        );
+        floor.position.x = TUNE.sectors?.floorCenterX ?? center.x;
         floor.position.z = center.z;
       }
 
@@ -2922,7 +3033,6 @@ function ThreeProductionScene({
         const skinColors = ['#d6a47a', '#9a6848', '#e0b48f', '#704832'];
         const worker = new THREE.Group();
         worker.name = `worker-${index + 1}`;
-        worker.visible = SHOW_WORKERS;
         worker.position.y = -0.095;
         worker.scale.setScalar(1.12);
 
@@ -3097,6 +3207,43 @@ function ThreeProductionScene({
 
         staticGroup.add(marker);
       });
+
+      // === ETAP 1 STREF: sektory linii glownej ===
+      // Kolorowy obrys + etykieta przy kazdej stacji montazowej. Operatorzy juz
+      // istnieja; te strefy delimituja obszary i niosa 'sectorSlot' na przyszlosc.
+      if ((TUNE.sectors?.show ?? true) && routePoints.length) {
+        const s = TUNE.sectors ?? {};
+        routePoints.forEach((point, index) => {
+          const stage = latestRef.current.stages[index];
+          const def = MAINLINE_SECTORS[index] ?? {
+            label: stage?.name ?? `Etap ${index}`,
+            minutes: null,
+          };
+          const sideOffset = getStationSideOffset(routePoints, index, routeCenter);
+          const outwardDir = sideOffset.clone().normalize();
+          const zone = createSectorZone({
+            label: def.label,
+            sublabel: def.minutes ? `${def.minutes} min` : '',
+            color: stage?.color ?? '#2563eb',
+            width: s.width ?? 3.6,
+            depth: s.depth ?? 3.0,
+            opacity: s.opacity ?? 0.22,
+            labelHeight: s.labelHeight ?? 1.55,
+          });
+          const zoneCenter = point
+            .clone()
+            .add(sideOffset)
+            .addScaledVector(outwardDir, s.outward ?? 1.1);
+          zone.position.set(zoneCenter.x, 0.02, zoneCenter.z);
+          zone.userData.sectorGroup = 'mainline';
+          zone.userData.stageIndex = index;
+          staticGroup.add(zone);
+        });
+
+        // === ETAP 2+3 STREF: sektory peryferyjne wg planu hali ===
+        // Podmontaze, komponenty, magazyny, naprawa, kaciki, bufor podstaw.
+        buildPeripheralSectors(staticGroup, routePoints, TUNE.sectors ?? {});
+      }
 
       if (routePoints.length) {
         const entryExtension = ENTRY_CONVEYOR_LENGTH + 1.6;
@@ -3464,63 +3611,15 @@ function ThreeProductionScene({
         const stage = stagesNow[poseUnit.currentIndex];
         const isHorizontalAssembly = ['locks', 'shelves', 'back', 'door', 'lockers', 'finalize'].includes(stage?.icon);
         const isStandingStage = stage?.icon === 'finalize';
-        const isApproachingStandingStage = poseUnit.mode === 'travel'
-          && stagesNow[poseUnit.travelTo]?.icon === 'finalize';
-        const finalizeProgress = isStandingStage
-          ? THREE.MathUtils.clamp(
-            (poseUnit.assemblyProgress ?? poseUnit.progress ?? 0) / 100,
-            0,
-            1,
-          )
-          : 0;
-        // Nie przeskakuj od razu z wysokosci poziomej na stojaca. Opuszczanie
-        // calego modelu ma ten sam zakres czasu co obrot kolumny do pionu,
-        // dzieki czemu poczatek animacji nie zapada sie pod rolki.
-        const standingLiftProgress = isStandingStage
-          ? easeOut(THREE.MathUtils.clamp((finalizeProgress - 0.1) / 0.35, 0, 1))
-          : 0;
-        const conveyorLift = isStandingStage
-          ? THREE.MathUtils.lerp(0.34, TUNE.standingY, standingLiftProgress)
-          : 0.34;
+        const conveyorLift = isStandingStage ? TUNE.standingY : 0.34;
         model.visible = true;
         model.position.copy(pose.position);
         model.position.y = isHorizontalAssembly
           ? MODEL_LINE_Y + conveyorLift
           : MODEL_LINE_Y + conveyorLift + Math.sin(time * 2 + poseUnit.number) * 0.018;
-
-        if (halfMode === 'trail' && (isApproachingStandingStage || isStandingStage)) {
-          let sideClearance;
-          if (isApproachingStandingStage) {
-            // Zjedz na boczny tor JESZCZE W CZASIE DOJAZDU. Na koncu przejazdu
-            // druga polowa jest juz calkowicie poza obrysem pierwszej i podstawy.
-            const travelProgress = THREE.MathUtils.clamp(
-              (poseUnit.travelProgress ?? 0) / 100,
-              0,
-              1,
-            );
-            sideClearance = -SECOND_HALF_SIDE_CLEARANCE * easeOut(travelProgress);
-          } else {
-            // Na starcie finalu zachowaj pelny przeswit (bez skoku na srodek).
-            // Wsun sie poprzecznie dopiero po zakonczeniu pionowania.
-            const moveIn = easeOut(THREE.MathUtils.clamp((finalizeProgress - 0.5) / 0.3, 0, 1));
-            sideClearance = -SECOND_HALF_SIDE_CLEARANCE * (1 - moveIn);
-          }
-          // Lokalna os X modelu przeliczona na swiat dla dowolnego kierunku linii.
-          model.position.x += Math.cos(pose.angle) * sideClearance;
-          model.position.z -= Math.sin(pose.angle) * sideClearance;
-        }
-
         model.rotation.y += Math.atan2(Math.sin(pose.angle - model.rotation.y), Math.cos(pose.angle - model.rotation.y)) * 0.16;
         model.scale.setScalar(MODEL_RENDER_SCALE);
-        updateTwoPartLockerModel(
-          model,
-          leadUnit,
-          trailUnit,
-          time,
-          stagesNow,
-          halfMode,
-          troughLyingPosesRef.current,
-        );
+        updateTwoPartLockerModel(model, leadUnit, trailUnit, time, stagesNow, halfMode);
       };
 
       latestRef.current.visibleUnits.forEach((unit) => {
@@ -3988,7 +4087,7 @@ function App() {
       {
         id: crypto.randomUUID(),
         name: `Etap ${current.length + 1}`,
-        duration: DEFAULT_STAGE_SECONDS,
+        duration: 5,
         color: '#0f766e',
         icon: 'box',
       },
