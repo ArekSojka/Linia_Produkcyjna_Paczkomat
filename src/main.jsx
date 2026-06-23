@@ -209,6 +209,11 @@ const TUNE = {
   halfGapX: 0,
   // Pionowe dociagniecie stojacych kolumn (ujemne = nizej, gdy lewituja).
   columnSettleY: 0,
+  // === KOREKTA POZYCJI FINALNEJ (czesci na podstawie) — strojenie milimetrowe ===
+  // Dziala dopiero gdy polowy stoja na podstawie. Male wartosci, np. -0.02.
+  finalNudgeX: 0,  // bok (X): + na zewnatrz, - do srodka
+  finalNudgeZ: -0.08,  // wzdluz podstawy (Z): + do przodu, - do tylu
+  finalNudgeY: 0,  // gora/dol (Y)
   // Przeswit drugiej polowy podczas dojazdu nad podstawe. Najpierw konczy ona
   // ruch w bok, a dopiero potem lagodnie opada na docelowa wysokosc. Zapobiega
   // to przenikaniu kolumny przez geometrie podstawy w trakcie laczenia.
@@ -216,6 +221,9 @@ const TUNE = {
   // Wysokosc CALEGO stojacego paczkomatu (podstawa + kolumny) wzgledem linii.
   // Ujemne opuszcza go, zeby PODSTAWA siadla na tasmociagu, a nie lewitowala.
   standingY: -0.4,
+  // Wysokosc paczkomatu podczas montazu poziomego (etapy lezace). Lekko podniesione,
+  // zeby plecy nie wpadaly w rolki. Wczesniej na stale 0.34.
+  horizontalLift: 0.4,
   // Obrot CALEJ czesci wokol dlugiej osi (radiany). Math.PI = czesc staje
   // prawidlowo (nie do gory nogami). Daj 0, gdyby przegielo w druga strone.
   partsRotY: Math.PI,
@@ -242,6 +250,23 @@ const TUNE = {
   // odstep / przesun start, gdy skrytki nie wypelniaja kolumny (szpara u gory).
   cellRowStart: -2,
   cellRowSpacing: 0.4,
+  // === OBROT KORYT DO PIONU (etap 2) — strojenie wygladu ===
+  // portion: jaka czesc etapu trwa obrot (mniej = szybciej).
+  // arcLift: chwilowe uniesienie w trakcie obrotu, by koryta nie szly przez rolki (np. 0.3).
+  // pose0/pose1: pozycja KAZDEGO z dwoch koryt podczas lezenia. Zmniejsz offsetX,
+  //   jesli jada za bardzo w bok / "zamieniaja sie"; rotationZ pose1 = 180 (obrot).
+  troughTurn: {
+    portion: 0.2,
+    arcLift: 0.3,  // <- moja proba: unosi koryta w trakcie obrotu, by nie wpadaly w rolki
+    posOffset0: [0, 0, 0], // przesuniecie koryta modulu 0 [x=bok, y=gora/dol, z=wzdluz]
+    posOffset1: [0, 0, 0], // przesuniecie koryta modulu 1 [x, y, z]
+    pose0: { rotationX: 0, rotationY: 0, rotationZ: 0, offsetX: 1.04, offsetY: 0.7, offsetZ: 0 },
+    pose1: { rotationX: 0, rotationY: 0, rotationZ: 180, offsetX: 1.04, offsetY: -1.64, offsetZ: 0 },
+    // Niezalezna, UTRWALONA korekta OSOBNO dla duzego i malego koryta (rot w stopniach, pos w metrach).
+    // Dziala zawsze, tez w pionie — pozwala obracac/przesuwac kazdy typ koryta osobno.
+    large: { rot: [0, 0, 0], pos: [0, 0, 0] }, // duze (srodkowe) koryto
+    small: { rot: [0, 0, 0], pos: [0, 0, 0] }, // male koryto
+  },
   // === SCIANY BOCZNE ===
   // Obrot POJEDYNCZEJ sciany [rotX, rotY, rotZ] w radianach. Klucz "modul-faza"
   // ('0-first' = lewa sciana modulu 0, '0-second' = prawa, itd.). Domyslnie
@@ -2840,53 +2865,57 @@ function updateTwoPartLockerModel(
 
   parts.troughAssemblies.forEach((assembly) => {
     const moduleIndex = assembly.userData.moduleIndex ?? 0;
-    const troughTurnProgress = smooth(modFr(moduleIndex).structure / 0.2);
+    const troughTurnProgress = smooth(modFr(moduleIndex).structure / (TUNE.troughTurn?.portion ?? 0.2));
     // Etapy 0 i 1: zestaw lezy plasko. Dopiero poczatek etapu 2 podnosi
     // koryto razem z zamontowanymi juz zamkami do pozycji pionowej.
     const lyingAmount = 1 - troughTurnProgress;
+    const troughPosOffset = (moduleIndex === 0 ? TUNE.troughTurn?.posOffset0 : TUNE.troughTurn?.posOffset1) ?? [0, 0, 0];
     assembly.rotation.set(0, 0, -Math.PI * 0.5 * lyingAmount);
     assembly.position.x = THREE.MathUtils.lerp(
       assembly.userData.targetX,
       assembly.userData.targetX + assembly.userData.lyingOffsetX,
       lyingAmount,
-    );
+    ) + (troughPosOffset[0] ?? 0);
     assembly.position.y = THREE.MathUtils.lerp(
       assembly.userData.targetY,
       assembly.userData.targetY + assembly.userData.lyingOffsetY,
       lyingAmount,
-    );
-    assembly.position.z = 0;
+    ) + Math.sin(THREE.MathUtils.clamp(troughTurnProgress, 0, 1) * Math.PI) * (TUNE.troughTurn?.arcLift ?? 0) + (troughPosOffset[1] ?? 0);
+    assembly.position.z = 0 + (troughPosOffset[2] ?? 0);
   });
 
   // Knoby steruja bezposrednio DWOMA fizycznymi modelami koryt, a nie wspolnym
   // pivotem polowy paczkomatu. Odpowiadajace sobie koryta obu polow korzystaja
   // z tego samego zestawu korekt, ale nigdy nie obracaja drugiego typu koryta.
-  const applyLyingPose = (object, pose, troughTurnProgress) => {
+  const applyLyingPose = (object, pose, troughTurnProgress, fixed) => {
     const lyingAmount = 1 - troughTurnProgress;
+    const fRot = fixed?.rot ?? [0, 0, 0];
+    const fPos = fixed?.pos ?? [0, 0, 0];
     object.rotation.set(
-      THREE.MathUtils.degToRad(pose.rotationX) * lyingAmount,
-      THREE.MathUtils.degToRad(pose.rotationY) * lyingAmount,
-      THREE.MathUtils.degToRad(pose.rotationZ) * lyingAmount,
+      THREE.MathUtils.degToRad(pose.rotationX) * lyingAmount + THREE.MathUtils.degToRad(fRot[0] ?? 0),
+      THREE.MathUtils.degToRad(pose.rotationY) * lyingAmount + THREE.MathUtils.degToRad(fRot[1] ?? 0),
+      THREE.MathUtils.degToRad(pose.rotationZ) * lyingAmount + THREE.MathUtils.degToRad(fRot[2] ?? 0),
     );
     object.position.set(
-      pose.offsetX * lyingAmount,
-      pose.offsetY * lyingAmount,
-      pose.offsetZ * lyingAmount,
+      pose.offsetX * lyingAmount + (fPos[0] ?? 0),
+      pose.offsetY * lyingAmount + (fPos[1] ?? 0),
+      pose.offsetZ * lyingAmount + (fPos[2] ?? 0),
     );
   };
   parts.troughComponents.forEach((component) => {
     const componentIndex = component.userData.componentIndex ?? 0;
     const moduleIndex = component.userData.moduleIndex ?? 0;
-    const troughTurnProgress = smooth(modFr(moduleIndex).structure / 0.2);
-    const pose = troughLyingPoses[componentIndex] ?? DEFAULT_TROUGH_LYING_POSE;
-    applyLyingPose(component, pose, troughTurnProgress);
+    const troughTurnProgress = smooth(modFr(moduleIndex).structure / (TUNE.troughTurn?.portion ?? 0.2));
+    const pose = (componentIndex === 0 ? TUNE.troughTurn?.pose0 : TUNE.troughTurn?.pose1) ?? troughLyingPoses[componentIndex] ?? DEFAULT_TROUGH_LYING_POSE;
+    const troughFixed = componentIndex === 0 ? TUNE.troughTurn?.large : TUNE.troughTurn?.small;
+    applyLyingPose(component, pose, troughTurnProgress, troughFixed);
   });
   // Zamki sa montowane na pierwszym (wiekszym) korycie, dlatego przez etapy
   // 0 i 1 dostaja dokladnie ten sam obrot i przesuniecie co Koryto 1.
-  const lockTroughPose = troughLyingPoses[0] ?? DEFAULT_TROUGH_LYING_POSE;
+  const lockTroughPose = TUNE.troughTurn?.pose0 ?? troughLyingPoses[0] ?? DEFAULT_TROUGH_LYING_POSE;
   parts.lockPosePivots.forEach((pivot) => {
     const moduleIndex = pivot.userData.moduleIndex ?? 0;
-    const troughTurnProgress = smooth(modFr(moduleIndex).structure / 0.2);
+    const troughTurnProgress = smooth(modFr(moduleIndex).structure / (TUNE.troughTurn?.portion ?? 0.2));
     applyLyingPose(pivot, lockTroughPose, troughTurnProgress);
   });
 
@@ -3000,14 +3029,18 @@ function updateTwoPartLockerModel(
         * (1 - secondHalfLandingProgress);
     const gap = (TUNE.halfGapX ?? 0) * (isFirstModule ? 0.5 : -0.5);
     const settle = (TUNE.columnSettleY ?? 0) * landingProgress;
+    // Strojenie milimetrowe pozycji finalnej na podstawie (TUNE.finalNudge*),
+    // wprowadzane dopiero gdy polowa laduje na podstawie (landingProgress).
+    const finalNudge = landingProgress;
+    const outwardSign = Math.sign(root.userData.finalX) || 1;
     root.rotation.x = Math.PI * 0.5 * liftProgress;
     root.position.x = THREE.MathUtils.lerp(
       root.userData.startX,
       root.userData.finalX,
       horizontalProgress,
-    ) + gap;
-    root.position.y = settle + approachLift;
-    root.position.z = centeredZ;
+    ) + gap + outwardSign * (TUNE.finalNudgeX ?? 0) * finalNudge;
+    root.position.y = settle + approachLift + (TUNE.finalNudgeY ?? 0) * finalNudge;
+    root.position.z = centeredZ + (TUNE.finalNudgeZ ?? 0) * finalNudge;
   });
 
   // Laczenie, plecy, dach i daszek pojawiaja sie wzgledem DRUGIEJ (pozniejszej)
@@ -3884,9 +3917,10 @@ function ThreeProductionScene({
         const standingLiftProgress = isStandingStage
           ? easeOut(THREE.MathUtils.clamp((finalizeProgress - 0.1) / 0.35, 0, 1))
           : 0;
+        const horizontalLift = TUNE.horizontalLift ?? 0.34;
         const conveyorLift = isStandingStage
-          ? THREE.MathUtils.lerp(0.34, TUNE.standingY, standingLiftProgress)
-          : 0.34;
+          ? THREE.MathUtils.lerp(horizontalLift, TUNE.standingY, standingLiftProgress)
+          : horizontalLift;
         model.visible = true;
         model.position.copy(pose.position);
         model.position.y = isHorizontalAssembly
