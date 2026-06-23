@@ -30,39 +30,43 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
+// Domyslny czas pracy kazdego etapu. Zmiana tej jednej wartosci ustawia czas
+// wszystkich etapow startowych oraz nowych etapow dodawanych w interfejsie.
+const DEFAULT_STAGE_SECONDS = 10;
+
 const baseStages = [
   {
     id: crypto.randomUUID(),
     name: 'Etap 0: podanie koryt',
-    duration: 2,
+    duration: DEFAULT_STAGE_SECONDS,
     color: '#475569',
     icon: 'trough',
   },
   {
     id: crypto.randomUUID(),
     name: 'Etap 1: montaz 22 zamkow',
-    duration: 2,
+    duration: DEFAULT_STAGE_SECONDS,
     color: '#2563eb',
     icon: 'locks',
   },
   {
     id: crypto.randomUUID(),
     name: 'Etap 2: sciany boczne i polki',
-    duration: 2,
+    duration: DEFAULT_STAGE_SECONDS,
     color: '#0891b2',
     icon: 'shelves',
   },
   {
     id: crypto.randomUUID(),
     name: 'Etap 3: montaz 22 skrytek',
-    duration: 2,
+    duration: DEFAULT_STAGE_SECONDS,
     color: '#16a34a',
     icon: 'lockers',
   },
   {
     id: crypto.randomUUID(),
     name: 'Etap 4: polaczenie, plecy i dachy',
-    duration: 2,
+    duration: DEFAULT_STAGE_SECONDS,
     color: '#7c3aed',
     icon: 'finalize',
   },
@@ -123,6 +127,9 @@ const MIN_TRAVEL_SECONDS = 3.2;
 const ENTRY_TRAVEL_SECONDS = 2;
 const ENTRY_CONVEYOR_LENGTH = 5.8;
 const COMPLETED_DISPLAY_SECONDS = 5;
+// Pracownicy pozostaja w scenie i w kodzie, ale sa tymczasowo niewidoczni.
+// Zmien na true, aby ponownie ich pokazac.
+const SHOW_WORKERS = false;
 // === JEDNO zrodlo prawdy dla liczby skrytek na polowe paczkomatu ===
 // Zakres docelowy 10 / 11 / 12. Ta liczba musi sie zgadzac z modelem
 // polek + drzwi (polkiorazdrzwi.glb). Zmiana tylko tej jednej wartosci
@@ -202,6 +209,10 @@ const TUNE = {
   halfGapX: 0,
   // Pionowe dociagniecie stojacych kolumn (ujemne = nizej, gdy lewituja).
   columnSettleY: 0,
+  // Przeswit drugiej polowy podczas dojazdu nad podstawe. Najpierw konczy ona
+  // ruch w bok, a dopiero potem lagodnie opada na docelowa wysokosc. Zapobiega
+  // to przenikaniu kolumny przez geometrie podstawy w trakcie laczenia.
+  secondHalfApproachLift: 0.32,
   // Wysokosc CALEGO stojacego paczkomatu (podstawa + kolumny) wzgledem linii.
   // Ujemne opuszcza go, zeby PODSTAWA siadla na tasmociagu, a nie lewitowala.
   standingY: -0.4,
@@ -302,7 +313,35 @@ const TUNE = {
 const ASSEMBLY_LENGTH = 4.8;
 const ASSEMBLY_HALF_LENGTH = ASSEMBLY_LENGTH / 2;
 const ASSEMBLY_ITEM_SPACING = 0.4;
-const MODEL_RENDER_SCALE = 0.88;
+// Wspolna skala calego paczkomatu. Jest nakladana na nadrzedna grupe, wiec
+// wszystkie czesci oraz ich lokalne przesuniecia animacji rosna proporcjonalnie.
+// 1.06 daje ok. 20% wiekszy model niz poprzednie 0.88 i nadal zostawia zapas
+// na rolotoku o szerokosci CONVEYOR_WIDTH.
+const MODEL_RENDER_SCALE = 1.06;
+// Druga polowa jest osobnym modelem jadacym ta sama osia co pierwsza. Na
+// ostatniej stacji musi najpierw zejsc z tej osi na swoja strone, inaczej
+// podczas stawiania przechodzi przez pierwsza kolumne i podstawe.
+const SECOND_HALF_SIDE_CLEARANCE = 1.7;
+const DEFAULT_TROUGH_LYING_POSE = {
+  rotationX: 0,
+  rotationY: 0,
+  rotationZ: 0,
+  offsetX: 1.04,
+  offsetY: 0.7,
+  offsetZ: 0,
+};
+const createDefaultTroughLyingPoses = () => Array.from(
+  { length: MODULE_COUNT },
+  (_, index) => (
+    index === 0
+      ? { ...DEFAULT_TROUGH_LYING_POSE }
+      : {
+          ...DEFAULT_TROUGH_LYING_POSE,
+          rotationZ: 180,
+          offsetY: -1.64,
+        }
+  ),
+);
 const LOCK_TROUGH_MODEL_URL = '/models/components/lock-trough.glb';
 const CENTER_TROUGH_MODEL_URL = '/models/components/trough-center.glb';
 const SMALL_TROUGH_LEFT_MODEL_URL = '/models/components/small-trough-left.glb';
@@ -2204,6 +2243,8 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
 
   const moduleRoots = [];
   const troughAssemblies = [];
+  const troughComponents = [];
+  const lockPosePivots = [];
   const troughParts = [];
   const lockRails = [];
   const locks = [];
@@ -2242,6 +2283,7 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
 
     const troughAssembly = new THREE.Group();
     troughAssembly.name = `rotatingTroughAssembly-${moduleIndex + 1}`;
+    troughAssembly.userData.moduleIndex = moduleIndex;
     troughAssembly.position.set(stageOneTemplates ? 0 : 0.91, 0, 0);
     troughAssembly.rotation.z = stageOneTemplates ? 0 : -Math.PI / 2;
     content.add(troughAssembly);
@@ -2254,10 +2296,17 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
         ? [stageOneTemplates.centerTrough, stageOneTemplates.smallTroughLeft]
         : [stageOneTemplates.trough, stageOneTemplates.smallTroughRight];
       moduleTroughTemplates.forEach((template, componentIndex) => {
+        const componentPivot = new THREE.Group();
+        componentPivot.name = `troughComponentPivot-${moduleIndex + 1}-${componentIndex + 1}`;
+        componentPivot.userData.componentIndex = componentIndex;
+        componentPivot.userData.moduleIndex = moduleIndex;
+        componentPivot.userData.targetPosition = new THREE.Vector3();
         const troughModel = applyGlbMaterial(cloneGlbComponent(template), 'trough');
         troughModel.name = `glbTrough-${moduleIndex + 1}-${componentIndex + 1}`;
         troughModel.position.x = -moduleCenterX;
-        troughModelGroup.add(troughModel);
+        componentPivot.add(troughModel);
+        troughModelGroup.add(componentPivot);
+        troughComponents.push(componentPivot);
       });
       troughParts.push(troughModelGroup);
       troughAssembly.add(troughModelGroup);
@@ -2295,6 +2344,11 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
       }
     }
     const lockTargetY = stageOneTemplates ? -0.58 : 0;
+    const lockPosePivot = new THREE.Group();
+    lockPosePivot.name = `lockPosePivot-${moduleIndex + 1}`;
+    lockPosePivot.userData.moduleIndex = moduleIndex;
+    troughAssembly.add(lockPosePivot);
+    lockPosePivots.push(lockPosePivot);
 
     for (let row = 0; row < LOCKS_PER_MODULE; row += 1) {
       const rowZ = -2 + row * ASSEMBLY_ITEM_SPACING;
@@ -2330,8 +2384,37 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
         lock.userData.meshes = [housing, latch, pin];
       }
       locks.push(lock);
-      troughAssembly.add(lock);
+      lockPosePivot.add(lock);
     }
+
+    // Zmierz automatycznie korekte potrzebna po polozeniu calego zestawu
+    // (koryto + zamki) o 90 stopni. Zachowujemy srodek X i dolna krawedz Y,
+    // wiec zestaw lezy na rolkach zamiast obracac sie wokol przypadkowego
+    // punktu eksportu modelu GLB.
+    const troughTargetX = troughAssembly.position.x;
+    const troughTargetY = troughAssembly.position.y;
+    const measureTroughPose = (rotationZ) => {
+      troughAssembly.rotation.z = rotationZ;
+      troughAssembly.position.set(troughTargetX, troughTargetY, 0);
+      group.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(troughAssembly);
+      const worldCenter = bounds.getCenter(new THREE.Vector3());
+      const localCenter = content.worldToLocal(worldCenter.clone());
+      const localBottom = content.worldToLocal(
+        new THREE.Vector3(worldCenter.x, bounds.min.y, worldCenter.z),
+      ).y;
+      return { centerX: localCenter.x, bottomY: localBottom };
+    };
+    const uprightTroughPose = measureTroughPose(0);
+    const lyingTroughPose = measureTroughPose(-Math.PI / 2);
+    troughAssembly.userData.targetX = troughTargetX;
+    troughAssembly.userData.targetY = troughTargetY;
+    troughAssembly.userData.lyingOffsetX = uprightTroughPose.centerX - lyingTroughPose.centerX;
+    troughAssembly.userData.lyingOffsetY = uprightTroughPose.bottomY - lyingTroughPose.bottomY;
+    troughAssembly.rotation.z = -Math.PI / 2;
+    troughAssembly.position.x = troughTargetX + troughAssembly.userData.lyingOffsetX;
+    troughAssembly.position.y = troughTargetY + troughAssembly.userData.lyingOffsetY;
+    group.updateMatrixWorld(true);
 
     const moduleWallTemplates = moduleIndex === 0
       ? { left: stageOneTemplates?.sideWallCenter, right: stageOneTemplates?.sideWallLeft }
@@ -2605,6 +2688,8 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
   group.userData.parts = {
     moduleRoots,
     troughAssemblies,
+    troughComponents,
+    lockPosePivots,
     troughParts,
     lockRails,
     locks,
@@ -2627,7 +2712,15 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
   return group;
 }
 
-function updateTwoPartLockerModel(group, leadUnit, trailUnit, time, stages, halfMode) {
+function updateTwoPartLockerModel(
+  group,
+  leadUnit,
+  trailUnit,
+  time,
+  stages,
+  halfMode,
+  troughLyingPoses = createDefaultTroughLyingPoses(),
+) {
   const parts = group.userData.parts;
   const stageIndex = (icon) => stages.findIndex((candidate) => candidate.icon === icon);
   const smooth = (value) => easeOut(THREE.MathUtils.clamp(value, 0, 1));
@@ -2655,8 +2748,10 @@ function updateTwoPartLockerModel(group, leadUnit, trailUnit, time, stages, half
       return THREE.MathUtils.clamp(t - idx, 0, 1);
     };
     return {
-      // Koryto jest nosnikiem od samego wejscia na linie (Etap 0).
-      trough: u.mode === 'entry' ? 1 : at('trough'),
+      // Koryto jest gotowym nosnikiem od samego wejscia na linie. Nie zerujemy
+      // jego postepu po zatrzymaniu na etapie 0, bo powodowalo to skok skali
+      // 1 -> 0.72 -> 1 (pozorne kurczenie i ponowne rozciaganie).
+      trough: 1,
       locks: at('locks'),
       structure: at('shelves'),
       lockers: at('lockers'),
@@ -2709,14 +2804,56 @@ function updateTwoPartLockerModel(group, leadUnit, trailUnit, time, stages, half
     });
   });
 
-  const troughTurnProgress = smooth(structureBuild / 0.2);
   parts.troughAssemblies.forEach((assembly) => {
-    assembly.rotation.z = group.userData.usesStageOneGlb
-      ? 0
-      : -Math.PI * 0.5 * (1 - troughTurnProgress);
-    assembly.position.y = group.userData.usesStageOneGlb
-      ? 0
-      : THREE.MathUtils.lerp(-0.5, 0, troughTurnProgress);
+    const moduleIndex = assembly.userData.moduleIndex ?? 0;
+    const troughTurnProgress = smooth(modFr(moduleIndex).structure / 0.2);
+    // Etapy 0 i 1: zestaw lezy plasko. Dopiero poczatek etapu 2 podnosi
+    // koryto razem z zamontowanymi juz zamkami do pozycji pionowej.
+    const lyingAmount = 1 - troughTurnProgress;
+    assembly.rotation.set(0, 0, -Math.PI * 0.5 * lyingAmount);
+    assembly.position.x = THREE.MathUtils.lerp(
+      assembly.userData.targetX,
+      assembly.userData.targetX + assembly.userData.lyingOffsetX,
+      lyingAmount,
+    );
+    assembly.position.y = THREE.MathUtils.lerp(
+      assembly.userData.targetY,
+      assembly.userData.targetY + assembly.userData.lyingOffsetY,
+      lyingAmount,
+    );
+    assembly.position.z = 0;
+  });
+
+  // Knoby steruja bezposrednio DWOMA fizycznymi modelami koryt, a nie wspolnym
+  // pivotem polowy paczkomatu. Odpowiadajace sobie koryta obu polow korzystaja
+  // z tego samego zestawu korekt, ale nigdy nie obracaja drugiego typu koryta.
+  const applyLyingPose = (object, pose, troughTurnProgress) => {
+    const lyingAmount = 1 - troughTurnProgress;
+    object.rotation.set(
+      THREE.MathUtils.degToRad(pose.rotationX) * lyingAmount,
+      THREE.MathUtils.degToRad(pose.rotationY) * lyingAmount,
+      THREE.MathUtils.degToRad(pose.rotationZ) * lyingAmount,
+    );
+    object.position.set(
+      pose.offsetX * lyingAmount,
+      pose.offsetY * lyingAmount,
+      pose.offsetZ * lyingAmount,
+    );
+  };
+  parts.troughComponents.forEach((component) => {
+    const componentIndex = component.userData.componentIndex ?? 0;
+    const moduleIndex = component.userData.moduleIndex ?? 0;
+    const troughTurnProgress = smooth(modFr(moduleIndex).structure / 0.2);
+    const pose = troughLyingPoses[componentIndex] ?? DEFAULT_TROUGH_LYING_POSE;
+    applyLyingPose(component, pose, troughTurnProgress);
+  });
+  // Zamki sa montowane na pierwszym (wiekszym) korycie, dlatego przez etapy
+  // 0 i 1 dostaja dokladnie ten sam obrot i przesuniecie co Koryto 1.
+  const lockTroughPose = troughLyingPoses[0] ?? DEFAULT_TROUGH_LYING_POSE;
+  parts.lockPosePivots.forEach((pivot) => {
+    const moduleIndex = pivot.userData.moduleIndex ?? 0;
+    const troughTurnProgress = smooth(modFr(moduleIndex).structure / 0.2);
+    applyLyingPose(pivot, lockTroughPose, troughTurnProgress);
   });
 
   const animateWall = (wall, progress) => {
@@ -2782,9 +2919,23 @@ function updateTwoPartLockerModel(group, leadUnit, trailUnit, time, stages, half
   });
 
   const baseProgress = smooth(finalizeBuild / 0.16);
+  // Cala grupa modelu schodzi z wysokosci poziomej (0.34) do standingY w
+  // trakcie pionowania. Podstawa jest jej dzieckiem, wiec bez kompensacji
+  // pojawialaby sie wysoko nad rolkami i opadala razem z rodzicem.
+  const baseParentLiftProgress = smooth((finalizeBuild - 0.1) / 0.35);
+  const currentParentLift = THREE.MathUtils.lerp(
+    0.34,
+    TUNE.standingY,
+    baseParentLiftProgress,
+  );
+  const baseWorldAnchorCompensation = (
+    TUNE.standingY - currentParentLift
+  ) / MODEL_RENDER_SCALE;
   [parts.base, parts.baseFront].forEach((part) => {
     setPartOpacity(part, baseProgress);
-    part.position.y = part.userData.targetY - (1 - baseProgress) * 0.48;
+    // Kompensujemy ruch nadrzednej grupy, dlatego pozycja SWIATOWA podstawy
+    // pozostaje stala od pierwszej widocznej klatki animacji.
+    part.position.y = part.userData.targetY + baseWorldAnchorCompensation;
   });
 
   // Sekwencja koncowa "jedna za druga": pierwsza polowa wstaje pionowo na
@@ -2801,11 +2952,27 @@ function updateTwoPartLockerModel(group, leadUnit, trailUnit, time, stages, half
     const fr = modFr(root.userData.moduleIndex);
     const liftProgress = smooth((fr.finalize - 0.1) / 0.35);
     const joinProgress = smooth((fr.finalize - 0.5) / 0.25);
+    // Druga polowa konczy dojazd w bok przed rozpoczeciem opuszczania. Wczesniej
+    // oba ruchy zachodzily jednoczesnie, przez co dol kolumny przecinal podstawe.
+    const secondHalfSlideProgress = smooth((fr.finalize - 0.5) / 0.18);
+    const secondHalfLandingProgress = smooth((fr.finalize - 0.68) / 0.12);
+    const horizontalProgress = isFirstModule ? joinProgress : secondHalfSlideProgress;
+    const landingProgress = isFirstModule ? joinProgress : secondHalfLandingProgress;
+    const uprightForLanding = smooth((fr.finalize - 0.38) / 0.12);
+    const approachLift = isFirstModule
+      ? 0
+      : (TUNE.secondHalfApproachLift ?? 0.32)
+        * uprightForLanding
+        * (1 - secondHalfLandingProgress);
     const gap = (TUNE.halfGapX ?? 0) * (isFirstModule ? 0.5 : -0.5);
-    const settle = (TUNE.columnSettleY ?? 0) * joinProgress;
+    const settle = (TUNE.columnSettleY ?? 0) * landingProgress;
     root.rotation.x = Math.PI * 0.5 * liftProgress;
-    root.position.x = THREE.MathUtils.lerp(root.userData.startX, root.userData.finalX, joinProgress) + gap;
-    root.position.y = settle;
+    root.position.x = THREE.MathUtils.lerp(
+      root.userData.startX,
+      root.userData.finalX,
+      horizontalProgress,
+    ) + gap;
+    root.position.y = settle + approachLift;
     root.position.z = centeredZ;
   });
 
@@ -2833,10 +3000,28 @@ function updateTwoPartLockerModel(group, leadUnit, trailUnit, time, stages, half
     fascia.position.y = fascia.userData.targetY + (1 - progress) * 0.7;
   });
 
-  // Lampy ostrzegawcze wylaczone - unosily sie nad linia jako pomaranczowe
-  // stozki i wygladaly na blad. Postoj/oczekiwanie pokazujemy sama animacja.
-  parts.warningLight.visible = false;
-  parts.warningGlow.intensity = 0;
+  // Alarm dotyczy tej konkretnej polowy, ktora czeka na zwolnienie stacji lub
+  // odcinka. Lampka jedzie razem z nosnikiem i gasnie natychmiast po ruszeniu.
+  const alarmUnit = halfMode === 'trail' ? trailUnit : leadUnit;
+  const isWaitingForClearance = Boolean(alarmUnit?.isBlocked);
+  parts.warningLight.visible = isWaitingForClearance;
+  if (isWaitingForClearance) {
+    // Pozycja nad poziomym korytem, blisko zewnetrznej strony danej polowy.
+    // Oczekiwanie nie wystepuje na finalnym, pionowym etapie.
+    parts.warningLight.position.set(
+      halfMode === 'trail' ? -0.9 : 0.9,
+      0.72,
+      -ASSEMBLY_HALF_LENGTH + 0.4,
+    );
+    const alarmPulse = 1 + Math.sin(time * 9) * 0.16;
+    parts.warningBulb.scale.setScalar(alarmPulse);
+    parts.warningBulb.material.emissiveIntensity = 1.8 + Math.sin(time * 10) * 0.55;
+    parts.warningGlow.intensity = 1.65 + Math.sin(time * 10) * 0.6;
+  } else {
+    parts.warningBulb.scale.setScalar(1);
+    parts.warningBulb.material.emissiveIntensity = 0;
+    parts.warningGlow.intensity = 0;
+  }
 
   // === Pokazujemy tylko JEDNA polowe (osobne obiekty na tasmie) ===
   // 'lead' = modul 0 + podstawa/dach/daszek/laczenie (czolo paczkomatu).
@@ -2868,6 +3053,7 @@ function ThreeProductionScene({
   const controlsRef = useRef(null);
   const latestRef = useRef({ stages, visibleUnits, trailUnits, scheduleConflictCount });
   const [stageOneModelStatus, setStageOneModelStatus] = useState('loading');
+  const troughLyingPosesRef = useRef(createDefaultTroughLyingPoses());
 
   latestRef.current = { stages, visibleUnits, trailUnits, scheduleConflictCount };
 
@@ -3033,6 +3219,7 @@ function ThreeProductionScene({
         const skinColors = ['#d6a47a', '#9a6848', '#e0b48f', '#704832'];
         const worker = new THREE.Group();
         worker.name = `worker-${index + 1}`;
+        worker.visible = SHOW_WORKERS;
         worker.position.y = -0.095;
         worker.scale.setScalar(1.12);
 
@@ -3611,15 +3798,63 @@ function ThreeProductionScene({
         const stage = stagesNow[poseUnit.currentIndex];
         const isHorizontalAssembly = ['locks', 'shelves', 'back', 'door', 'lockers', 'finalize'].includes(stage?.icon);
         const isStandingStage = stage?.icon === 'finalize';
-        const conveyorLift = isStandingStage ? TUNE.standingY : 0.34;
+        const isApproachingStandingStage = poseUnit.mode === 'travel'
+          && stagesNow[poseUnit.travelTo]?.icon === 'finalize';
+        const finalizeProgress = isStandingStage
+          ? THREE.MathUtils.clamp(
+            (poseUnit.assemblyProgress ?? poseUnit.progress ?? 0) / 100,
+            0,
+            1,
+          )
+          : 0;
+        // Nie przeskakuj od razu z wysokosci poziomej na stojaca. Opuszczanie
+        // calego modelu ma ten sam zakres czasu co obrot kolumny do pionu,
+        // dzieki czemu poczatek animacji nie zapada sie pod rolki.
+        const standingLiftProgress = isStandingStage
+          ? easeOut(THREE.MathUtils.clamp((finalizeProgress - 0.1) / 0.35, 0, 1))
+          : 0;
+        const conveyorLift = isStandingStage
+          ? THREE.MathUtils.lerp(0.34, TUNE.standingY, standingLiftProgress)
+          : 0.34;
         model.visible = true;
         model.position.copy(pose.position);
         model.position.y = isHorizontalAssembly
           ? MODEL_LINE_Y + conveyorLift
           : MODEL_LINE_Y + conveyorLift + Math.sin(time * 2 + poseUnit.number) * 0.018;
+
+        if (halfMode === 'trail' && (isApproachingStandingStage || isStandingStage)) {
+          let sideClearance;
+          if (isApproachingStandingStage) {
+            // Zjedz na boczny tor JESZCZE W CZASIE DOJAZDU. Na koncu przejazdu
+            // druga polowa jest juz calkowicie poza obrysem pierwszej i podstawy.
+            const travelProgress = THREE.MathUtils.clamp(
+              (poseUnit.travelProgress ?? 0) / 100,
+              0,
+              1,
+            );
+            sideClearance = -SECOND_HALF_SIDE_CLEARANCE * easeOut(travelProgress);
+          } else {
+            // Na starcie finalu zachowaj pelny przeswit (bez skoku na srodek).
+            // Wsun sie poprzecznie dopiero po zakonczeniu pionowania.
+            const moveIn = easeOut(THREE.MathUtils.clamp((finalizeProgress - 0.5) / 0.3, 0, 1));
+            sideClearance = -SECOND_HALF_SIDE_CLEARANCE * (1 - moveIn);
+          }
+          // Lokalna os X modelu przeliczona na swiat dla dowolnego kierunku linii.
+          model.position.x += Math.cos(pose.angle) * sideClearance;
+          model.position.z -= Math.sin(pose.angle) * sideClearance;
+        }
+
         model.rotation.y += Math.atan2(Math.sin(pose.angle - model.rotation.y), Math.cos(pose.angle - model.rotation.y)) * 0.16;
         model.scale.setScalar(MODEL_RENDER_SCALE);
-        updateTwoPartLockerModel(model, leadUnit, trailUnit, time, stagesNow, halfMode);
+        updateTwoPartLockerModel(
+          model,
+          leadUnit,
+          trailUnit,
+          time,
+          stagesNow,
+          halfMode,
+          troughLyingPosesRef.current,
+        );
       };
 
       latestRef.current.visibleUnits.forEach((unit) => {
@@ -4087,7 +4322,7 @@ function App() {
       {
         id: crypto.randomUUID(),
         name: `Etap ${current.length + 1}`,
-        duration: 5,
+        duration: DEFAULT_STAGE_SECONDS,
         color: '#0f766e',
         icon: 'box',
       },
