@@ -37,35 +37,35 @@ const DEFAULT_STAGE_SECONDS = 10;
 const baseStages = [
   {
     id: crypto.randomUUID(),
-    name: 'Etap 0: podanie koryt',
+    name: 'Etap 0: podmontaż koryt',
     duration: DEFAULT_STAGE_SECONDS,
     color: '#475569',
     icon: 'trough',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 1: montaz 22 zamkow',
+    name: 'Etap 1: montaż zamków',
     duration: DEFAULT_STAGE_SECONDS,
     color: '#2563eb',
     icon: 'locks',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 2: sciany boczne i polki',
+    name: 'Etap 2: montaż pionów',
     duration: DEFAULT_STAGE_SECONDS,
     color: '#0891b2',
     icon: 'shelves',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 3: montaz 22 skrytek',
+    name: 'Etap 3: montaż drzwi',
     duration: DEFAULT_STAGE_SECONDS,
     color: '#16a34a',
     icon: 'lockers',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 4: polaczenie, plecy i dachy',
+    name: 'Etap 4: połączenie na podstawie, dachy',
     duration: DEFAULT_STAGE_SECONDS,
     color: '#7c3aed',
     icon: 'finalize',
@@ -129,7 +129,7 @@ const ENTRY_CONVEYOR_LENGTH = 5.8;
 const COMPLETED_DISPLAY_SECONDS = 5;
 // Pracownicy pozostaja w scenie i w kodzie, ale sa tymczasowo niewidoczni.
 // Zmien na true, aby ponownie ich pokazac.
-const SHOW_WORKERS = false;
+const SHOW_WORKERS = true;
 // === JEDNO zrodlo prawdy dla liczby skrytek na polowe paczkomatu ===
 // Zakres docelowy 10 / 11 / 12. Ta liczba musi sie zgadzac z modelem
 // polek + drzwi (polkiorazdrzwi.glb). Zmiana tylko tej jednej wartosci
@@ -277,7 +277,7 @@ const TUNE = {
   // (bufor, pozniejsze stacje, strefy) bez zmian.
   tightEarly: {
     untilStage: 2,  // etapy <= tego sa zageszczone (2 = etapy 0,1,2 blizej siebie)
-    spacing: 15,    // odstep miedzy wczesnymi etapami (pelny stationSpacing = 20)
+    spacing: 11,    // odstep miedzy wczesnymi etapami (pelny stationSpacing = 20)
   },
   // === STREFY HALI (sektory wg planu od przelozonego) ===
   // Koloruje i opisuje obszary robocze wokol linii. Pozniej w wybrane strefy
@@ -288,6 +288,9 @@ const TUNE = {
     width: 3.6,        // szerokosc strefy w poprzek linii (X)
     depth: 3.0,        // glebokosc strefy wzdluz linii (Z)
     outward: 1.1,      // dodatkowe odsuniecie strefy na zewnatrz od operatora
+    // --- pracownicy przy stanowiskach linii glownej (liczba sterowana w panelu UI) ---
+    workersPerStationDefault: 1,        // domyslna liczba dla nowych stacji
+    workerSpacing: 1.15,                // odstep miedzy pracownikami na tej samej stronie
     labelHeight: 1.55, // wysokosc unoszacej etykiety nad podloga
     // --- powierzchnia hali ---
     floorWidth: 46,    // szerokosc podlogi hali w poprzek linii (X)
@@ -302,7 +305,7 @@ const TUNE = {
     planXScale: 0.07,   // w poprzek = wzdluz (jednolita skala -> ksztalty jak w planie)
     planGap: 1.5,       // staly odstep stref od linii montazowej (cofa je od stanowisk)
     // --- bufor podstaw (siatka miejsc na palety) ---
-    bufferPx: 1160,     // pozycja bufora w planie (px)
+    bufferPx: 1400,     // pozycja bufora w planie (px) - za koniec rolotoku, poza Blendy/Dachy
     bufferPy: 85,       // pozycja bufora w planie (py)
     bufferCols: 4,      // liczba miejsc wzdluz
     bufferRows: 2,      // liczba miejsc w poprzek
@@ -432,8 +435,10 @@ const getTravelDurations = (stageCount) => {
 
 // Domyslny czas dojazdu miedzy etapami = 2 s (mozna zmienic w UI / Tasmociag).
 const DEFAULT_TRAVEL_SECONDS = 2;
+// Domyslne czasy przejazdu kolejnych przejazdow: E0->E1, E1->E2, E2->E3 (bufor), E3->E4.
+const DEFAULT_TRAVEL_TIMES = [3, 3, 7, 3];
 const getDefaultTravelTimes = (stageCount) =>
-  getTravelDurations(stageCount).map(() => DEFAULT_TRAVEL_SECONDS);
+  getTravelDurations(stageCount).map((_, index) => DEFAULT_TRAVEL_TIMES[index] ?? DEFAULT_TRAVEL_SECONDS);
 
 const normalizeTravelTimes = (travelTimes, stageCount) => {
   const defaults = getDefaultTravelTimes(stageCount);
@@ -1080,6 +1085,31 @@ function TravelTimeEditor({ stages, travelTimes, updateTravelTime }) {
   );
 }
 
+function WorkersEditor({ stages, workersPerStation, updateWorkerCount }) {
+  if (!stages.length) return null;
+
+  return (
+    <div className="travel-editor">
+      <div className="mini-heading">
+        <span>Pracownicy</span>
+        <strong>Liczba na stanowisko</strong>
+      </div>
+      {stages.map((stage, index) => (
+        <label className="travel-row" key={stage.id}>
+          <span>{stage.name || `Etap ${index}`}</span>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            value={workersPerStation[index] ?? 1}
+            onChange={(event) => updateWorkerCount(index, event.target.value)}
+          />
+        </label>
+      ))}
+    </div>
+  );
+}
+
 function Metrics({
   unitCount,
   setUnitCount,
@@ -1089,6 +1119,8 @@ function Metrics({
   launchInterval,
   travelTimes,
   updateTravelTime,
+  workersPerStation,
+  updateWorkerCount,
   stopwatch,
 }) {
   return (
@@ -1138,6 +1170,8 @@ function Metrics({
       </div>
 
       <TravelTimeEditor stages={stages} travelTimes={travelTimes} updateTravelTime={updateTravelTime} />
+
+      <WorkersEditor stages={stages} workersPerStation={workersPerStation} updateWorkerCount={updateWorkerCount} />
 
       <div className="time-breakdown">
         {stages.map((stage) => (
@@ -1381,33 +1415,33 @@ const SECTOR_COLORS = {
 const PLAN_SECTORS = [
   // Ustawione recznie w edytorze stref (edytor_stref.html).
   { label: 'Paleta NOK', type: 'magazyn', px: 58, py: 75, pw: 73, ph: 70 },
-  { label: 'Kącik czystości', type: 'czystosc', px: 183, py: 77, pw: 39, ph: 46 },
-  { label: 'Półka', type: 'komponent', px: 232, py: 91, pw: 54, ph: 72 },
-  { label: 'Ściana', type: 'komponent', px: 296, py: 82, pw: 68, ph: 55 },
-  { label: 'Kant', type: 'komponent', px: 359, py: 82, pw: 58, ph: 55 },
-  { label: 'PFB drzwi', type: 'komponent', px: 489, py: 91, pw: 58, ph: 72 },
-  { label: 'Podmontaż drzwi', type: 'podmontaz', minutes: 12, px: 575, py: 82, pw: 110, ph: 55 },
-  { label: 'Drzwi', type: 'komponent', px: 658, py: 110, pw: 51, ph: 74 },
-  { label: 'Dachy', type: 'komponent', px: 889, py: 80, pw: 48, ph: 71 },
-  { label: 'Blendy', type: 'komponent', px: 940, py: 72, pw: 50, ph: 55 },
+  { label: 'Kącik czystości', type: 'czystosc', px: 260, py: 52, pw: 39, ph: 46 },
+  { label: 'Półka', type: 'komponent', px: 309, py: 65, pw: 54, ph: 72 },
+  { label: 'Ściana', type: 'komponent', px: 373, py: 58, pw: 68, ph: 55 },
+  { label: 'Kant', type: 'komponent', px: 440, py: 58, pw: 58, ph: 55 },
+  { label: 'PFB drzwi', type: 'komponent', px: 745, py: 83, pw: 58, ph: 72 },
+  { label: 'Podmontaż drzwi', type: 'podmontaz', minutes: 12, px: 832, py: 74, pw: 110, ph: 55 },
+  { label: 'Drzwi', type: 'komponent', px: 916, py: 110, pw: 51, ph: 74 },
+  { label: 'Dachy', type: 'komponent', px: 1187, py: 75, pw: 48, ph: 71 },
+  { label: 'Blendy', type: 'komponent', px: 1239, py: 67, pw: 50, ph: 55 },
   { label: 'Blacha koryta', type: 'komponent', px: 58, py: 272, pw: 73, ph: 55 },
   { label: 'Regał elem. złączne', type: 'magazyn', px: 68, py: 400, pw: 93, ph: 140 },
   { label: 'Paleta NOK', type: 'magazyn', px: 192, py: 435, pw: 55, ph: 70 },
-  { label: 'Półka', type: 'komponent', px: 260, py: 301, pw: 46, ph: 91 },
-  { label: 'Ściana', type: 'komponent', px: 319, py: 287, pw: 65, ph: 65 },
-  { label: 'Strefa napraw', type: 'naprawa', px: 455, py: 344, pw: 150, ph: 264 },
-  { label: 'Drzwi', type: 'komponent', px: 655, py: 265, pw: 51, ph: 88 },
-  { label: 'Kącik czystości', type: 'czystosc', px: 607, py: 286, pw: 38, ph: 48 },
-  { label: 'Podmontaż drzwi', type: 'podmontaz', minutes: 12, px: 594, py: 371, pw: 68, ph: 118 },
-  { label: 'PFB drzwi', type: 'komponent', px: 607, py: 454, pw: 91, ph: 40 },
-  { label: 'Podłoga', type: 'komponent', px: 755, py: 289, pw: 65, ph: 65 },
-  { label: 'Sufit', type: 'komponent', px: 824, py: 288, pw: 65, ph: 65 },
-  { label: 'Rama', type: 'komponent', px: 701, py: 437, pw: 52, ph: 66 },
-  { label: 'Podmontaż podłogi i sufitu', type: 'podmontaz', minutes: 16, px: 783, py: 443, pw: 110, ph: 55 },
-  { label: 'Klapa pokrywy', type: 'komponent', px: 884, py: 375, pw: 88, ph: 46 },
-  { label: 'Blacha dolna', type: 'komponent', px: 871, py: 439, pw: 64, ph: 66 },
-  { label: 'Paleta NOK', type: 'magazyn', px: 1055, py: 435, pw: 60, ph: 70 },
-  { label: 'Kącik czystości', type: 'czystosc', px: 1107, py: 448, pw: 40, ph: 40 },
+  { label: 'Półka', type: 'komponent', px: 307, py: 332, pw: 46, ph: 91 },
+  { label: 'Ściana', type: 'komponent', px: 366, py: 319, pw: 65, ph: 65 },
+  { label: 'Strefa napraw', type: 'naprawa', px: 649, py: 348, pw: 194, ph: 259 },
+  { label: 'Drzwi', type: 'komponent', px: 863, py: 262, pw: 51, ph: 88 },
+  { label: 'Kącik czystości', type: 'czystosc', px: 817, py: 283, pw: 38, ph: 48 },
+  { label: 'Podmontaż drzwi', type: 'podmontaz', minutes: 12, px: 803, py: 368, pw: 68, ph: 118 },
+  { label: 'PFB drzwi', type: 'komponent', px: 814, py: 451, pw: 91, ph: 40 },
+  { label: 'Podłoga', type: 'komponent', px: 1011, py: 292, pw: 65, ph: 65 },
+  { label: 'Sufit', type: 'komponent', px: 1080, py: 291, pw: 65, ph: 65 },
+  { label: 'Rama', type: 'komponent', px: 928, py: 432, pw: 52, ph: 66 },
+  { label: 'Podmontaż podłogi i sufitu', type: 'podmontaz', minutes: 16, px: 1013, py: 436, pw: 110, ph: 55 },
+  { label: 'Klapa pokrywy', type: 'komponent', px: 1106, py: 365, pw: 88, ph: 46 },
+  { label: 'Blacha dolna', type: 'komponent', px: 1103, py: 431, pw: 64, ph: 66 },
+  { label: 'Paleta NOK', type: 'magazyn', px: 1190, py: 429, pw: 60, ph: 70 },
+  { label: 'Kącik czystości', type: 'czystosc', px: 1243, py: 444, pw: 40, ph: 40 },
 ];
 
 // Bufor podstaw na koncu linii - strefa magazynowa z siatka miejsc na palety.
@@ -3047,15 +3081,16 @@ function ThreeProductionScene({
   visibleUnits,
   trailUnits,
   scheduleConflictCount = 0,
+  workersPerStation = [],
   onAssemblyMetrics,
 }) {
   const mountRef = useRef(null);
   const controlsRef = useRef(null);
-  const latestRef = useRef({ stages, visibleUnits, trailUnits, scheduleConflictCount });
+  const latestRef = useRef({ stages, visibleUnits, trailUnits, scheduleConflictCount, workersPerStation });
   const [stageOneModelStatus, setStageOneModelStatus] = useState('loading');
   const troughLyingPosesRef = useRef(createDefaultTroughLyingPoses());
 
-  latestRef.current = { stages, visibleUnits, trailUnits, scheduleConflictCount };
+  latestRef.current = { stages, visibleUnits, trailUnits, scheduleConflictCount, workersPerStation };
 
   const zoomCamera = (factor) => {
     const controls = controlsRef.current;
@@ -3170,6 +3205,8 @@ function ThreeProductionScene({
       stationWorkers.length = 0;
       routePoints = buildLinePoints(latestRef.current.stages.length);
       const rollerMaterial = makeMaterial(ROLLER_COLOR, 0.38, 0.58);
+      // Rolki w strefie bufora (przelot) - inny, jasnoszary kolor dla wyroznienia.
+      const bufferRollerMaterial = makeMaterial('#94a3b8', 0.45, 0.45);
 
       if (routePoints.length) {
         const routeBounds = new THREE.Box3().setFromPoints(routePoints);
@@ -3207,7 +3244,28 @@ function ThreeProductionScene({
       routePoints.forEach((point, index) => {
         const stage = latestRef.current.stages[index];
         const sideOffset = getStationSideOffset(routePoints, index, routeCenter);
-        const stationPosition = point.clone().add(sideOffset);
+        const tangent = getRouteTangent(routePoints, index);
+        // Ilosc pracownikow przy tej stacji (TUNE.sectors.workersPerStation).
+        const workersCfg = latestRef.current.workersPerStation ?? [];
+        const workerCountDefault = TUNE.sectors?.workersPerStationDefault ?? 1;
+        const rawWorkerCount = workersCfg[index] ?? workerCountDefault;
+        const workerCount = Math.max(0, Math.round(Number(rawWorkerCount)) || 0);
+        // Rozklad po obu stronach linii proporcjonalnie (polowa na strone),
+        // z rozsunieciem wzdluz linii, zeby sie nie nakladali.
+        const workerGap = TUNE.sectors?.workerSpacing ?? 1.15;
+        const placements = [];
+        const leftN = Math.ceil(workerCount / 2);
+        const rightN = workerCount - leftN;
+        [[leftN, 1], [rightN, -1]].forEach(([n, sign]) => {
+          for (let k = 0; k < n; k += 1) {
+            placements.push({ sign, along: (k - (n - 1) / 2) * workerGap });
+          }
+        });
+
+        placements.forEach((placement, workerSlot) => {
+        const stationPosition = point.clone()
+          .addScaledVector(sideOffset, placement.sign)
+          .addScaledVector(tangent, placement.along);
         const targetDirection = point.clone().sub(stationPosition);
         const stationAngle = Math.atan2(targetDirection.x, targetDirection.z);
         const marker = new THREE.Group();
@@ -3218,7 +3276,7 @@ function ThreeProductionScene({
         const stageColor = stage?.color ?? '#2563eb';
         const skinColors = ['#d6a47a', '#9a6848', '#e0b48f', '#704832'];
         const worker = new THREE.Group();
-        worker.name = `worker-${index + 1}`;
+        worker.name = `worker-${index + 1}-${workerSlot + 1}`;
         worker.visible = SHOW_WORKERS;
         worker.position.y = -0.095;
         worker.scale.setScalar(1.12);
@@ -3379,6 +3437,7 @@ function ThreeProductionScene({
 
         worker.userData = {
           index,
+          seed: workerSlot,
           head: headPivot,
           torso,
           vest,
@@ -3393,6 +3452,7 @@ function ThreeProductionScene({
         marker.add(worker);
 
         staticGroup.add(marker);
+        });
       });
 
       // === ETAP 1 STREF: sektory linii glownej ===
@@ -3411,7 +3471,7 @@ function ThreeProductionScene({
           const zone = createSectorZone({
             label: def.label,
             sublabel: def.minutes ? `${def.minutes} min` : '',
-            color: stage?.color ?? '#2563eb',
+            color: '#7c3aed', // jednolity fiolet stanowisk montazowych
             width: s.width ?? 3.6,
             depth: s.depth ?? 3.0,
             opacity: s.opacity ?? 0.22,
@@ -3576,11 +3636,22 @@ function ThreeProductionScene({
         }
 
         const rollerCount = Math.max(12, Math.floor(length / 0.34));
+        // Granice strefy bufora (przelot) we wspolrzednych swiata: odcinek miedzy
+        // etapem 'afterStage' a nastepnym. Rolki w tym zakresie kolorujemy inaczej.
+        const bufSeg = TUNE.bufferSegment ?? {};
+        const bufStage = bufSeg.afterStage ?? -1;
+        const bufA = routePoints[bufStage];
+        const bufB = routePoints[bufStage + 1];
+        const bufLo = (bufSeg.enabled && bufA && bufB) ? Math.min(bufA.z, bufB.z) : Infinity;
+        const bufHi = (bufSeg.enabled && bufA && bufB) ? Math.max(bufA.z, bufB.z) : -Infinity;
         for (let rollerIndex = 0; rollerIndex < rollerCount; rollerIndex += 1) {
           const z = -length / 2 + (rollerIndex / Math.max(rollerCount - 1, 1)) * length;
+          const frac = (z + length / 2) / length;
+          const worldZ = conveyorStart.z + frac * (conveyorEnd.z - conveyorStart.z);
+          const isBuffer = worldZ > bufLo && worldZ < bufHi;
           const roller = new THREE.Mesh(
             new THREE.CylinderGeometry(0.18, 0.18, ROLLER_LENGTH, 30),
-            rollerMaterial,
+            isBuffer ? bufferRollerMaterial : rollerMaterial,
           );
           roller.rotation.z = Math.PI / 2;
           roller.position.set(0, 0.36, z);
@@ -3777,7 +3848,7 @@ function ThreeProductionScene({
 
     const render = () => {
       const time = clock.getElapsedTime();
-      const signature = latestRef.current.stages.map((stage) => `${stage.id}:${stage.color}:${stage.name}`).join('|');
+      const signature = latestRef.current.stages.map((stage) => `${stage.id}:${stage.color}:${stage.name}`).join('|') + '|W:' + (latestRef.current.workersPerStation ?? []).join(',');
 
       if (signature !== lastStageSignature) {
         lastStageSignature = signature;
@@ -3908,11 +3979,11 @@ function ThreeProductionScene({
             && unit.mode === 'assembly'
             && (unit.assemblyProgress ?? 0) > 0,
         );
-        const phase = time * (active ? 3.4 : 1.1) + worker.userData.index * 0.8;
+        const phase = time * (active ? 3.4 : 1.1) + worker.userData.index * 0.8 + (worker.userData.seed ?? 0) * 1.7;
         const workSwing = Math.sin(phase);
         const precisionPulse = Math.sin(phase * 2.4);
         const placementCycle = (1 - Math.cos(phase * 0.72)) * 0.5;
-        const action = worker.userData.index % 4;
+        const action = (worker.userData.index + (worker.userData.seed ?? 0)) % 4;
         const actionPoses = [
           {
             leftShoulder: -0.86,
@@ -4056,6 +4127,7 @@ function ProductionLine({
   conveyorDuration,
   productionFinished,
   scheduleConflictCount,
+  workersPerStation,
   onAssemblyMetrics,
 }) {
   const leadUnit = visibleUnits[0] ?? {
@@ -4144,6 +4216,7 @@ function ProductionLine({
             visibleUnits={visibleUnits}
             trailUnits={trailUnits}
             scheduleConflictCount={scheduleConflictCount}
+            workersPerStation={workersPerStation}
             onAssemblyMetrics={onAssemblyMetrics}
           />
         </div>
@@ -4191,6 +4264,7 @@ function App() {
   const [stages, setStages] = useState(baseStages);
   const [elapsed, setElapsed] = useState(0);
   const [travelTimes, setTravelTimes] = useState(() => getDefaultTravelTimes(baseStages.length));
+  const [workersPerStation, setWorkersPerStation] = useState(() => baseStages.map(() => 1));
   const [stopwatchRunning, setStopwatchRunning] = useState(false);
   const [stopwatchElapsed, setStopwatchElapsed] = useState(0);
   const [measuredPartLength, setMeasuredPartLength] = useState(
@@ -4212,6 +4286,13 @@ function App() {
   const normalizedTravelTimes = useMemo(
     () => normalizeTravelTimes(travelTimes, normalizedStages.length),
     [normalizedStages.length, travelTimes],
+  );
+  const normalizedWorkers = useMemo(
+    () => normalizedStages.map((_, i) => {
+      const v = Math.round(Number(workersPerStation[i]));
+      return Number.isFinite(v) ? Math.max(0, v) : 1;
+    }),
+    [normalizedStages, workersPerStation],
   );
   const productionSchedule = useMemo(() => {
     const schedule = buildProductionSchedule(
@@ -4299,6 +4380,14 @@ function App() {
     });
   };
 
+  const updateWorkerCount = (index, value) => {
+    setWorkersPerStation((current) => {
+      const next = normalizedStages.map((_, i) => current[i] ?? 1);
+      next[index] = value;
+      return next;
+    });
+  };
+
   const toggleStopwatch = () => {
     if (stopwatchRunning) {
       stopwatchBaseRef.current = stopwatchElapsed;
@@ -4356,6 +4445,8 @@ function App() {
         launchInterval={launchInterval}
         travelTimes={normalizedTravelTimes}
         updateTravelTime={updateTravelTime}
+        workersPerStation={workersPerStation}
+        updateWorkerCount={updateWorkerCount}
         stopwatch={{
           elapsed: stopwatchElapsed,
           running: stopwatchRunning,
@@ -4370,6 +4461,7 @@ function App() {
         conveyorDuration={animationCycle}
         productionFinished={elapsed >= animationCycle}
         scheduleConflictCount={productionSchedule.reservationConflicts.length}
+        workersPerStation={normalizedWorkers}
         onAssemblyMetrics={handleAssemblyMetrics}
       />
       <StageEditor

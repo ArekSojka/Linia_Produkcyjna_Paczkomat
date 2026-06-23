@@ -45,6 +45,10 @@
   .ref { fill:none; stroke:#475569; stroke-width:1.5; stroke-dasharray:5 4; }
   .reftxt { fill:#64748b; font-size:11px; }
   .dimtxt { fill:#fff; font-size:12px; font-weight:600; paint-order:stroke; stroke:#0b1220; stroke-width:3; pointer-events:none; }
+  .station { pointer-events:none; }
+  .stationRect { fill:#7c3aed; fill-opacity:0.32; stroke:#a78bfa; stroke-width:2; }
+  .stationLbl { fill:#ede9fe; font-size:10px; font-weight:600; text-anchor:middle; }
+  .stationMin { fill:#ddd6fe; font-size:9px; text-anchor:middle; }
 </style>
 </head>
 <body>
@@ -69,6 +73,7 @@
     <svg id="svg" viewBox="0 0 1283 540" preserveAspectRatio="xMidYMid meet" tabindex="0">
       <image id="bgimg" x="0" y="0" width="1283" height="540" opacity="0.55" style="display:none" preserveAspectRatio="none"></image>
       <g id="ref"></g>
+      <g id="stations"></g>
       <g id="sectors"></g>
     </svg>
   </div>
@@ -130,44 +135,44 @@ const COLORS = { podmontaz:'#2563eb', komponent:'#d97706', magazyn:'#64748b', na
 const LINE_PY = 180; // oś linii w planie (py)
 
 let sectors = [
-  { label:'Paleta NOK', type:'magazyn', px:58, py:75, pw:73, ph:70 },
-  { label:'Kącik czystości', type:'czystosc', px:183, py:77, pw:39, ph:46 },
-  { label:'Półka', type:'komponent', px:232, py:91, pw:54, ph:72 },
-  { label:'Ściana', type:'komponent', px:296, py:82, pw:68, ph:55 },
-  { label:'Kant', type:'komponent', px:359, py:82, pw:58, ph:55 },
-  { label:'PFB drzwi', type:'komponent', px:489, py:91, pw:58, ph:72 },
-  { label:'Podmontaż drzwi', type:'podmontaz', minutes:12, px:575, py:82, pw:110, ph:55 },
-  { label:'Drzwi', type:'komponent', px:658, py:110, pw:51, ph:74 },
-  { label:'Dachy', type:'komponent', px:889, py:80, pw:48, ph:71 },
-  { label:'Blendy', type:'komponent', px:940, py:72, pw:50, ph:55 },
-  { label:'Blacha koryta', type:'komponent', px:58, py:272, pw:73, ph:55 },
-  { label:'Regał elem. złączne', type:'magazyn', px:68, py:400, pw:93, ph:140 },
-  { label:'Paleta NOK', type:'magazyn', px:192, py:435, pw:55, ph:70 },
-  { label:'Półka', type:'komponent', px:260, py:301, pw:46, ph:91 },
-  { label:'Ściana', type:'komponent', px:319, py:287, pw:65, ph:65 },
-  { label:'Strefa napraw', type:'naprawa', px:455, py:344, pw:150, ph:264 },
-  { label:'Drzwi', type:'komponent', px:655, py:265, pw:51, ph:88 },
-  { label:'Kącik czystości', type:'czystosc', px:607, py:286, pw:38, ph:48 },
-  { label:'Podmontaż drzwi', type:'podmontaz', minutes:12, px:594, py:371, pw:68, ph:118 },
-  { label:'PFB drzwi', type:'komponent', px:607, py:454, pw:91, ph:40 },
-  { label:'Podłoga', type:'komponent', px:755, py:289, pw:65, ph:65 },
-  { label:'Sufit', type:'komponent', px:824, py:288, pw:65, ph:65 },
-  { label:'Rama', type:'komponent', px:701, py:437, pw:52, ph:66 },
-  { label:'Podmontaż podłogi i sufitu', type:'podmontaz', minutes:16, px:783, py:443, pw:110, ph:55 },
-  { label:'Klapa pokrywy', type:'komponent', px:884, py:375, pw:88, ph:46 },
-  { label:'Blacha dolna', type:'komponent', px:871, py:439, pw:64, ph:66 },
-  { label:'Paleta NOK', type:'magazyn', px:1055, py:435, pw:60, ph:70 },
-  { label:'Kącik czystości', type:'czystosc', px:1107, py:448, pw:40, ph:40 },
+  { label: 'Paleta NOK', type: 'magazyn', px: 58, py: 75, pw: 73, ph: 70 },
+  { label: 'Kącik czystości', type: 'czystosc', px: 260, py: 52, pw: 39, ph: 46 },
+  { label: 'Półka', type: 'komponent', px: 309, py: 65, pw: 54, ph: 72 },
+  { label: 'Ściana', type: 'komponent', px: 373, py: 58, pw: 68, ph: 55 },
+  { label: 'Kant', type: 'komponent', px: 440, py: 58, pw: 58, ph: 55 },
+  { label: 'PFB drzwi', type: 'komponent', px: 745, py: 83, pw: 58, ph: 72 },
+  { label: 'Podmontaż drzwi', type: 'podmontaz', minutes: 12, px: 832, py: 74, pw: 110, ph: 55 },
+  { label: 'Drzwi', type: 'komponent', px: 916, py: 110, pw: 51, ph: 74 },
+  { label: 'Dachy', type: 'komponent', px: 1187, py: 75, pw: 48, ph: 71 },
+  { label: 'Blendy', type: 'komponent', px: 1239, py: 67, pw: 50, ph: 55 },
+  { label: 'Blacha koryta', type: 'komponent', px: 58, py: 272, pw: 73, ph: 55 },
+  { label: 'Regał elem. złączne', type: 'magazyn', px: 68, py: 400, pw: 93, ph: 140 },
+  { label: 'Paleta NOK', type: 'magazyn', px: 192, py: 435, pw: 55, ph: 70 },
+  { label: 'Półka', type: 'komponent', px: 307, py: 332, pw: 46, ph: 91 },
+  { label: 'Ściana', type: 'komponent', px: 366, py: 319, pw: 65, ph: 65 },
+  { label: 'Strefa napraw', type: 'naprawa', px: 649, py: 348, pw: 194, ph: 259 },
+  { label: 'Drzwi', type: 'komponent', px: 863, py: 262, pw: 51, ph: 88 },
+  { label: 'Kącik czystości', type: 'czystosc', px: 817, py: 283, pw: 38, ph: 48 },
+  { label: 'Podmontaż drzwi', type: 'podmontaz', minutes: 12, px: 803, py: 368, pw: 68, ph: 118 },
+  { label: 'PFB drzwi', type: 'komponent', px: 814, py: 451, pw: 91, ph: 40 },
+  { label: 'Podłoga', type: 'komponent', px: 1011, py: 292, pw: 65, ph: 65 },
+  { label: 'Sufit', type: 'komponent', px: 1080, py: 291, pw: 65, ph: 65 },
+  { label: 'Rama', type: 'komponent', px: 928, py: 432, pw: 52, ph: 66 },
+  { label: 'Podmontaż podłogi i sufitu', type: 'podmontaz', minutes: 16, px: 1013, py: 436, pw: 110, ph: 55 },
+  { label: 'Klapa pokrywy', type: 'komponent', px: 1106, py: 365, pw: 88, ph: 46 },
+  { label: 'Blacha dolna', type: 'komponent', px: 1103, py: 431, pw: 64, ph: 66 },
+  { label: 'Paleta NOK', type: 'magazyn', px: 1190, py: 429, pw: 60, ph: 70 },
+  { label: 'Kącik czystości', type: 'czystosc', px: 1243, py: 444, pw: 40, ph: 40 },
 ];
 
 // Pozycje stacji w przestrzeni edytora (px) po zmianach rolotoku:
 // stationSpacing 20, bufor +9 po etapie 2, zageszczone etapy 0-1-2 (spacing 15).
 const STATIONS = [
-  { px:86,   label:'E0 Podm. koryta' },
-  { px:301,  label:'E1 Montaż zamków' },
-  { px:515,  label:'E2 Montaż pionów' },
-  { px:929,  label:'E3 Montaż drzwi' },
-  { px:1215, label:'E4 Montaż finalny' },
+  { px:86,   label:'E0 Podm. koryta',  name:'Podmontaż koryta', minutes:9 },
+  { px:301,  label:'E1 Montaż zamków', name:'Montaż zamków',    minutes:null },
+  { px:515,  label:'E2 Montaż pionów', name:'Montaż pionów',    minutes:15 },
+  { px:929,  label:'E3 Montaż drzwi',  name:'Montaż drzwi',     minutes:12 },
+  { px:1215, label:'E4 Montaż finalny',name:'Montaż finalny',   minutes:16 },
 ];
 
 const svg = document.getElementById('svg');
@@ -183,14 +188,25 @@ function drawRef(){
   h += `<rect x="515" y="150" width="414" height="60" fill="#d97706" fill-opacity="0.12"></rect>`;
   h += `<text class="reftxt" x="722" y="184" text-anchor="middle" fill="#b45309">odcinek z buforem (przelot)</text>`;
   // znaczniki stacji
-  STATIONS.forEach(s=>{
-    h += `<line x1="${s.px}" y1="146" x2="${s.px}" y2="214" stroke="#94a3b8" stroke-width="2"></line>`;
-    h += `<text class="reftxt" x="${s.px}" y="142" text-anchor="middle" fill="#cbd5e1">${s.label}</text>`;
-  });
   h += `<text class="reftxt" x="650" y="232" text-anchor="middle">LINIA — rolotok (pozycje stacji po zmianach)</text>`;
   gRef.innerHTML = h;
 }
 drawRef();
+// Stale stanowiska montazowe (E0-E4) - nieedytowalne fioletowe prostokaty.
+// Pokazuja, gdzie jest stacja linii, zeby nie nakladac na nie stref.
+const STATION_W = 104, STATION_H = 74;
+function drawStations(){
+  const g = document.getElementById('stations');
+  let h = '';
+  STATIONS.forEach(s=>{
+    const x = s.px - STATION_W/2, y = LINE_PY - STATION_H/2;
+    h += `<rect class="stationRect" x="${x}" y="${y}" width="${STATION_W}" height="${STATION_H}" rx="3"></rect>`;
+    h += `<text class="stationLbl" x="${s.px}" y="${LINE_PY-9}">${s.name}</text>`;
+    if(s.minutes) h += `<text class="stationMin" x="${s.px}" y="${LINE_PY+10}">${s.minutes} min</text>`;
+  });
+  g.innerHTML = h;
+}
+drawStations();
 
 function toSvg(evt){
   const p = svg.createSVGPoint(); p.x = evt.clientX; p.y = evt.clientY;
