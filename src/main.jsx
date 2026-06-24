@@ -120,7 +120,6 @@ const buildBottleneckRows = (stages, schedule) => {
     name: stage.name || `Etap ${i}`,
     duration: Math.max(stage.duration ?? 0, 0),
     travelOut: null,
-    ingressWait: 0,
     egressBlock: 0,
   }));
   if (unit?.segments) {
@@ -129,9 +128,6 @@ const buildBottleneckRows = (stages, schedule) => {
       const sIdx = segs.findIndex((seg) => seg.type === 'stage' && seg.stageIndex === row.index);
       if (sIdx < 0) return;
       const stageSeg = segs[sIdx];
-      const prev = segs[sIdx - 1];
-      const arrival = prev ? prev.end : stageSeg.start;
-      row.ingressWait = Math.max(0, (stageSeg.start ?? 0) - (arrival ?? 0));
       const travelSeg = segs.find((seg) => seg.type === 'travel' && seg.from === row.index);
       if (travelSeg) {
         row.travelOut = travelSeg.duration ?? null;
@@ -152,10 +148,9 @@ const renderTimesReportHtml = ({ rows, cycleTime, launchInterval, totalTime }) =
   const blocks = [];
   blocks.push(`Bottleneck: <span class="bn-tag">Etap ${bnIdx} \u2014 ${esc(bn ? bn.name : "")}</span> (czas montazu ${f(maxDur)}) \u2014 tutaj najpierw ustawia sie kolejka.`);
   rows.forEach((r) => {
-    if (r.ingressWait > 0.05) blocks.push(`Etap ${r.index} \u2013 ${esc(r.name)}: czesc czeka <b>${f(r.ingressWait)}</b> na wejscie (stanowisko zajete).`);
     if (r.egressBlock > 0.05) blocks.push(`Miedzy Etapem ${r.index} a ${r.index + 1}: czesc zablokowana <b>${f(r.egressBlock)}</b> (czeka, az zwolni sie dalej).`);
   });
-  const totalWait = rows.reduce((a, r) => a + r.ingressWait + r.egressBlock, 0);
+  const totalWait = rows.reduce((a, r) => a + r.egressBlock, 0);
   const stageRowsHtml = rows.map((r) => `<tr${r.index === bnIdx ? ' class="bn"' : ''}><td>${r.index}</td><td>${esc(r.name)}</td><td>${f(r.duration)}</td><td>${r.travelOut != null ? f(r.travelOut) : '\u2014'}</td><td>${r.egressBlock > 0.05 ? f(r.egressBlock) : '\u2014'}</td></tr>`).join('');
   const blocksHtml = blocks.length ? `<ul>${blocks.map((b) => `<li>${b}</li>`).join('')}</ul>` : `<p class="ok">Brak istotnych blokad \u2014 przy obecnych czasach linia jest zbalansowana.</p>`;
   return `<!DOCTYPE html><html lang="pl"><head><meta charset="utf-8"><title>Raport czasow linii \u2014 paczkomat</title>
@@ -767,10 +762,13 @@ const buildProductionSchedule = (
   }
 
   const firstStarts = leadUnits.map((unit) => unit.startTime);
-  const averageLaunchInterval =
-    firstStarts.length > 1
-      ? (firstStarts[firstStarts.length - 1] - firstStarts[0]) / (firstStarts.length - 1)
-      : Math.max(stages[0]?.duration ?? 0, 0.1);
+  // Takt USTALONY: najwiekszy odstep miedzy kolejnymi startami (stan po rozbiegu
+  // pustej linii). Srednia zanizalaby takt przy malej liczbie sztuk - dla pomiaru
+  // przepustowosci liczy sie odstep w stanie ustalonym, czyli wartosc graniczna.
+  let steadyTakt = Math.max(stages[0]?.duration ?? 0, 0.1);
+  for (let i = 1; i < firstStarts.length; i += 1) {
+    steadyTakt = Math.max(steadyTakt, firstStarts[i] - firstStarts[i - 1]);
+  }
   const soloCycleTime =
     stages.reduce((sum, stage) => sum + Math.max(stage.duration, 0.1), 0)
     + travelDurations.reduce((sum, duration) => sum + duration, 0)
@@ -783,7 +781,7 @@ const buildProductionSchedule = (
     leadUnits,
     trailUnits,
     totalTime: Math.max(leadUnits[leadUnits.length - 1]?.finishTime ?? soloCycleTime, 0.1),
-    launchInterval: Math.max(averageLaunchInterval, 0.1),
+    launchInterval: Math.max(steadyTakt, 0.1),
     soloCycleTime: Math.max(soloCycleTime, 0.1),
     travelDurations,
     pairHeadway,
