@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   Clock3,
   DoorOpen,
+  FileText,
   Frame,
   Grid3X3,
   House,
@@ -106,6 +107,86 @@ const formatTime = (seconds) => {
   const minutes = Math.floor(seconds / 60);
   const rest = Math.round(seconds % 60);
   return `${minutes} min ${rest} s`;
+};
+
+// Liczy realne blokady na podstawie harmonogramu (jednostka w stanie ustalonym).
+// Dla kazdego etapu: ile czesc czeka na WEJSCIE (stacja zajeta) i ile jest
+// ZABLOKOWANA za etapem (czeka, az zwolni sie dalej), + czas przejazdu.
+const buildBottleneckRows = (stages, schedule) => {
+  const units = schedule?.leadUnits ?? [];
+  const unit = units[units.length - 1];
+  const rows = stages.map((stage, i) => ({
+    index: i,
+    name: stage.name || `Etap ${i}`,
+    duration: Math.max(stage.duration ?? 0, 0),
+    travelOut: null,
+    ingressWait: 0,
+    egressBlock: 0,
+  }));
+  if (unit?.segments) {
+    const segs = unit.segments;
+    rows.forEach((row) => {
+      const sIdx = segs.findIndex((seg) => seg.type === 'stage' && seg.stageIndex === row.index);
+      if (sIdx < 0) return;
+      const stageSeg = segs[sIdx];
+      const prev = segs[sIdx - 1];
+      const arrival = prev ? prev.end : stageSeg.start;
+      row.ingressWait = Math.max(0, (stageSeg.start ?? 0) - (arrival ?? 0));
+      const travelSeg = segs.find((seg) => seg.type === 'travel' && seg.from === row.index);
+      if (travelSeg) {
+        row.travelOut = travelSeg.duration ?? null;
+        row.egressBlock = Math.max(0, (travelSeg.start ?? 0) - (stageSeg.assemblyEnd ?? 0));
+      }
+    });
+  }
+  return rows;
+};
+
+const renderTimesReportHtml = ({ rows, cycleTime, launchInterval, totalTime }) => {
+  const esc = (v) => String(v).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const f = formatTime;
+  const now = new Date().toLocaleString('pl-PL');
+  let bnIdx = -1, maxDur = -1;
+  rows.forEach((r) => { if (r.duration > maxDur) { maxDur = r.duration; bnIdx = r.index; } });
+  const bn = rows.find((r) => r.index === bnIdx);
+  const blocks = [];
+  blocks.push(`Bottleneck: <span class="bn-tag">Etap ${bnIdx} \u2014 ${esc(bn ? bn.name : "")}</span> (czas montazu ${f(maxDur)}) \u2014 tutaj najpierw ustawia sie kolejka.`);
+  rows.forEach((r) => {
+    if (r.ingressWait > 0.05) blocks.push(`Etap ${r.index} \u2013 ${esc(r.name)}: czesc czeka <b>${f(r.ingressWait)}</b> na wejscie (stanowisko zajete).`);
+    if (r.egressBlock > 0.05) blocks.push(`Miedzy Etapem ${r.index} a ${r.index + 1}: czesc zablokowana <b>${f(r.egressBlock)}</b> (czeka, az zwolni sie dalej).`);
+  });
+  const totalWait = rows.reduce((a, r) => a + r.ingressWait + r.egressBlock, 0);
+  const stageRowsHtml = rows.map((r) => `<tr${r.index === bnIdx ? ' class="bn"' : ''}><td>${r.index}</td><td>${esc(r.name)}</td><td>${f(r.duration)}</td><td>${r.travelOut != null ? f(r.travelOut) : '\u2014'}</td><td>${r.egressBlock > 0.05 ? f(r.egressBlock) : '\u2014'}</td></tr>`).join('');
+  const blocksHtml = blocks.length ? `<ul>${blocks.map((b) => `<li>${b}</li>`).join('')}</ul>` : `<p class="ok">Brak istotnych blokad \u2014 przy obecnych czasach linia jest zbalansowana.</p>`;
+  return `<!DOCTYPE html><html lang="pl"><head><meta charset="utf-8"><title>Raport czasow linii \u2014 paczkomat</title>
+<style>
+  body{font-family:system-ui,Segoe UI,Arial,sans-serif;color:#0f172a;margin:32px;}
+  h1{font-size:20px;margin:0 0 4px;} .sub{color:#64748b;font-size:13px;margin:0 0 18px;}
+  h2{font-size:15px;margin:22px 0 8px;border-bottom:2px solid #e2e8f0;padding-bottom:4px;}
+  .cards{display:flex;gap:12px;margin:12px 0;} .card{flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;}
+  .card .l{font-size:12px;color:#64748b;} .card .v{font-size:18px;font-weight:600;}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid #e2e8f0;}
+  th{background:#f1f5f9;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:#475569;}
+  tr.bn td{background:#fff7ed;font-weight:600;}
+  .bn-tag{display:inline-block;background:#fde68a;color:#92400e;border-radius:4px;padding:2px 8px;font-weight:600;}
+  ul{margin:8px 0;padding-left:18px;} li{margin:4px 0;font-size:13px;} .ok{color:#15803d;font-weight:600;}
+  @media print{body{margin:14px;} .noprint{display:none;}}
+</style></head><body>
+  <h1>Raport czasow linii produkcyjnej \u2014 paczkomat</h1>
+  <p class="sub">Wygenerowano: ${now}</p>
+  <div class="cards">
+    <div class="card"><div class="l">Cykl jednej sztuki</div><div class="v">${f(cycleTime)}</div></div>
+    <div class="card"><div class="l">Nowy start co</div><div class="v">${f(launchInterval)}</div></div>
+    <div class="card"><div class="l">Laczny czas ciagly</div><div class="v">${f(totalTime)}</div></div>
+  </div>
+  <h2>Etapy i czasy</h2>
+  <table><thead><tr><th>#</th><th>Etap</th><th>Czas montazu</th><th>Przejazd do nastepnego</th><th>Blokada za etapem</th></tr></thead><tbody>${stageRowsHtml}</tbody></table>
+  <h2>Blokady / oczekiwania</h2>
+  ${blocksHtml}
+  <p class="sub" style="margin-top:6px">Suma oczekiwan na jedna czesc (stan ustalony): ${f(totalWait)}.</p>
+  <p class="noprint" style="margin-top:18px;color:#64748b;font-size:12px;">Aby zapisac jako PDF: w oknie drukowania wybierz \u201eZapisz jako PDF\u201d.</p>
+</body></html>`;
 };
 
 const CONVEYOR_WIDTH = 6.2;
@@ -243,6 +324,14 @@ const TUNE = {
   // odstep / przesun start, gdy skrytki nie wypelniaja kolumny (szpara u gory).
   cellRowStart: -2,
   cellRowSpacing: 0.4,
+  // === KAMERA (OrbitControls) — katy i zakres zoomu ===
+  camera: {
+    minDistance: 5,                 // jak blisko mozna dojechac (zoom in)
+    maxDistance: 110,               // jak daleko mozna oddalic (zoom out)
+    minPolarAngle: 0.08,            // najwyzsze ujecie (0 = pion z gory)
+    maxPolarAngle: Math.PI * 0.49,  // najnizsze ujecie (~plasko z boku); wieksze = nizej
+    moveSpeed: 14,                  // predkosc przesuwania klawiszami WASD (jednostki/s)
+  },
   // === OBROT KORYT DO PIONU (etap 2) — strojenie wygladu ===
   // portion: jaka czesc etapu trwa obrot (mniej = szybciej).
   // arcLift: chwilowe uniesienie w trakcie obrotu, by koryta nie szly przez rolki (np. 0.3).
@@ -1139,6 +1228,7 @@ function Metrics({
   updateTravelTime,
   workersPerStation,
   updateWorkerCount,
+  onExportPdf,
   stopwatch,
 }) {
   return (
@@ -1190,6 +1280,14 @@ function Metrics({
       <TravelTimeEditor stages={stages} travelTimes={travelTimes} updateTravelTime={updateTravelTime} />
 
       <WorkersEditor stages={stages} workersPerStation={workersPerStation} updateWorkerCount={updateWorkerCount} />
+
+      <button
+        type="button"
+        onClick={onExportPdf}
+        style={{ marginTop: 14, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }}
+      >
+        <FileText size={17} /> Eksportuj czasy do PDF
+      </button>
 
       <div className="time-breakdown">
         {stages.map((stage) => (
@@ -3166,10 +3264,31 @@ function ThreeProductionScene({
     controls.dampingFactor = 0.075;
     controls.enablePan = true;
     controls.screenSpacePanning = true;
-    controls.minDistance = 7;
-    controls.maxDistance = 95;
-    controls.maxPolarAngle = Math.PI * 0.48;
+    controls.minDistance = TUNE.camera?.minDistance ?? 5;
+    controls.maxDistance = TUNE.camera?.maxDistance ?? 110;
+    controls.minPolarAngle = TUNE.camera?.minPolarAngle ?? 0.08;
+    controls.maxPolarAngle = TUNE.camera?.maxPolarAngle ?? (Math.PI * 0.49);
     controls.target.set(0, 0.8, 0);
+
+    // === WOLNA KAMERA: przesuwanie klawiszami (WASD/strzalki + Q/E gora-dol, Shift=szybciej) ===
+    // Mysz dalej obraca (orbita); na telefonie zostaja gesty. Przesuwa kamere i cel razem.
+    const moveKeys = new Set();
+    const isTypingTarget = (el) => el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+    const MOVE_CODES = ['w', 'a', 's', 'd', 'q', 'e', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'];
+    const onMoveKeyDown = (event) => {
+      if (isTypingTarget(event.target)) return;
+      const k = event.key.toLowerCase();
+      if (MOVE_CODES.includes(k)) { moveKeys.add(k); event.preventDefault(); }
+    };
+    const onMoveKeyUp = (event) => { moveKeys.delete(event.key.toLowerCase()); };
+    const clearMoveKeys = () => moveKeys.clear();
+    window.addEventListener('keydown', onMoveKeyDown);
+    window.addEventListener('keyup', onMoveKeyUp);
+    window.addEventListener('blur', clearMoveKeys);
+    const moveForward = new THREE.Vector3();
+    const moveRight = new THREE.Vector3();
+    const moveDelta = new THREE.Vector3();
+    let lastMoveTime = 0;
     controlsRef.current = controls;
 
     const ambient = new THREE.HemisphereLight('#ffffff', '#9aa9b8', 1.55);
@@ -3250,8 +3369,8 @@ function ThreeProductionScene({
           const cameraDistance = Math.max(14, routeLength * 1.12);
           controls.target.set(center.x, 0.75, center.z);
           camera.position.set(center.x + cameraDistance * 0.72, cameraDistance * 0.55, center.z - cameraDistance * 0.72);
-          controls.minDistance = 7;
-          controls.maxDistance = Math.max(95, routeLength * 2.4);
+          controls.minDistance = TUNE.camera?.minDistance ?? 5;
+          controls.maxDistance = TUNE.camera?.maxDistance ?? Math.max(95, routeLength * 2.4);
           controls.update();
           controls.saveState();
           lastFittedStageCount = routePoints.length;
@@ -4092,6 +4211,29 @@ function ThreeProductionScene({
         worker.userData.vest.material.emissiveIntensity = active ? 0.12 : 0;
       });
 
+      // Wolna kamera: przesuwanie klawiszami (WASD/strzalki + Q/E gora/dol).
+      const moveDt = Math.min(Math.max(time - lastMoveTime, 0), 0.05);
+      lastMoveTime = time;
+      if (moveKeys.size) {
+        camera.getWorldDirection(moveForward);
+        moveForward.y = 0;
+        if (moveForward.lengthSq() < 1e-6) moveForward.set(0, 0, -1);
+        moveForward.normalize();
+        moveRight.crossVectors(moveForward, camera.up).normalize();
+        moveDelta.set(0, 0, 0);
+        if (moveKeys.has('w') || moveKeys.has('arrowup')) moveDelta.add(moveForward);
+        if (moveKeys.has('s') || moveKeys.has('arrowdown')) moveDelta.sub(moveForward);
+        if (moveKeys.has('d') || moveKeys.has('arrowright')) moveDelta.add(moveRight);
+        if (moveKeys.has('a') || moveKeys.has('arrowleft')) moveDelta.sub(moveRight);
+        if (moveKeys.has('e')) moveDelta.y += 1;
+        if (moveKeys.has('q')) moveDelta.y -= 1;
+        if (moveDelta.lengthSq() > 0) {
+          const moveSpeed = (TUNE.camera?.moveSpeed ?? 14) * (moveKeys.has('shift') ? 3 : 1);
+          moveDelta.normalize().multiplyScalar(moveSpeed * moveDt);
+          camera.position.add(moveDelta);
+          controls.target.add(moveDelta);
+        }
+      }
       controls.update();
       renderer.render(scene, camera);
       frame = requestAnimationFrame(render);
@@ -4103,6 +4245,9 @@ function ThreeProductionScene({
       disposed = true;
       cancelAnimationFrame(frame);
       ro.disconnect();
+      window.removeEventListener('keydown', onMoveKeyDown);
+      window.removeEventListener('keyup', onMoveKeyUp);
+      window.removeEventListener('blur', clearMoveKeys);
       controls.dispose();
       controlsRef.current = null;
       dracoLoader.dispose();
@@ -4338,6 +4483,21 @@ function App() {
   const totalTime = productionSchedule.totalTime;
   const animationCycle = Math.max(totalTime, 1);
 
+  const handleExportPdf = () => {
+    const rows = buildBottleneckRows(normalizedStages, productionSchedule);
+    const html = renderTimesReportHtml({ rows, cycleTime, launchInterval, totalTime });
+    const win = window.open('', '_blank');
+    if (!win) {
+      window.alert('Nie udalo sie otworzyc okna wydruku. Zezwol na wyskakujace okna i sprobuj ponownie.');
+      return;
+    }
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(() => { try { win.print(); } catch (e) {} }, 350);
+  };
+
   React.useEffect(() => {
     let frame;
     const start = performance.now();
@@ -4473,6 +4633,7 @@ function App() {
         updateTravelTime={updateTravelTime}
         workersPerStation={workersPerStation}
         updateWorkerCount={updateWorkerCount}
+        onExportPdf={handleExportPdf}
         stopwatch={{
           elapsed: stopwatchElapsed,
           running: stopwatchRunning,
