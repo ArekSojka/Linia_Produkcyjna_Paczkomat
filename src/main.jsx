@@ -39,33 +39,26 @@ const baseStages = [
     id: crypto.randomUUID(),
     name: 'Etap 0: podmontaż koryt',
     duration: DEFAULT_STAGE_SECONDS,
-    color: '#475569',
-    icon: 'trough',
-  },
-  {
-    id: crypto.randomUUID(),
-    name: 'Etap 1: montaż zamków',
-    duration: DEFAULT_STAGE_SECONDS,
     color: '#2563eb',
     icon: 'locks',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 2: montaż pionów',
+    name: 'Etap 1: montaż pionów',
     duration: DEFAULT_STAGE_SECONDS,
     color: '#0891b2',
     icon: 'shelves',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 3: montaż drzwi',
+    name: 'Etap 2: montaż drzwi',
     duration: DEFAULT_STAGE_SECONDS,
     color: '#16a34a',
     icon: 'lockers',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 4: połączenie na podstawie, dachy',
+    name: 'Etap 3: połączenie na podstawie, dachy',
     duration: DEFAULT_STAGE_SECONDS,
     color: '#7c3aed',
     icon: 'finalize',
@@ -292,7 +285,7 @@ const TUNE = {
   // skladania - przesuwa tylko geometrie stacji (i stref) za buforem.
   bufferSegment: {
     enabled: true,
-    afterStage: 2,    // bufor po tym etapie (2 = Montaz pionow), przed nastepnym
+    afterStage: 1,    // bufor po tym etapie (1 = Montaz pionow), przed nastepnym
     extraLength: 9,   // dodatkowa dlugosc rolotoku (swiat) = dlugosc bufora
     planPx: 99999,    // wylaczone: px->swiat liniowo wszedzie (edytor jest WYSIWYG)
   },
@@ -301,7 +294,7 @@ const TUNE = {
   // a wczesniejsze etapy dosuwaja sie do niego odstepem 'spacing'. Reszta linii
   // (bufor, pozniejsze stacje, strefy) bez zmian.
   tightEarly: {
-    untilStage: 2,  // etapy <= tego sa zageszczone (2 = etapy 0,1,2 blizej siebie)
+    untilStage: 1,  // etapy <= tego sa zageszczone (1 = etapy 0,1 blizej siebie)
     spacing: 11,    // odstep miedzy wczesnymi etapami (pelny stationSpacing = 20)
   },
   // === STREFY HALI (sektory wg planu od przelozonego) ===
@@ -461,7 +454,7 @@ const getTravelDurations = (stageCount) => {
 // Domyslny czas dojazdu miedzy etapami = 2 s (mozna zmienic w UI / Tasmociag).
 const DEFAULT_TRAVEL_SECONDS = 2;
 // Domyslne czasy przejazdu kolejnych przejazdow: E0->E1, E1->E2, E2->E3 (bufor), E3->E4.
-const DEFAULT_TRAVEL_TIMES = [3, 3, 7, 3];
+const DEFAULT_TRAVEL_TIMES = [3, 7, 3];
 const getDefaultTravelTimes = (stageCount) =>
   getTravelDurations(stageCount).map((_, index) => DEFAULT_TRAVEL_TIMES[index] ?? DEFAULT_TRAVEL_SECONDS);
 
@@ -1335,8 +1328,7 @@ function sectorRoundRect(ctx, x, y, w, h, r) {
 
 // Etykiety i czasy stacji linii glownej wg planu hali (indeks = nasz etap 0-4).
 const MAINLINE_SECTORS = [
-  { label: 'Podmontaż koryta', minutes: 9 },
-  { label: 'Montaż zamków', minutes: null },
+  { label: 'Podmontaż koryt', minutes: null },
   { label: 'Montaż pionów', minutes: 15 },
   { label: 'Montaż drzwi', minutes: 12 },
   { label: 'Montaż finalny', minutes: 16 },
