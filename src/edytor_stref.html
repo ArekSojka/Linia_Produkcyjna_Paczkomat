@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Edytor stref hali — paczkomat</title>
+<style>
+  :root { --bg:#0f172a; --panel:#1e293b; --line:#334155; --txt:#e2e8f0; --muted:#94a3b8; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--txt); }
+  header { padding:10px 14px; background:var(--panel); border-bottom:1px solid var(--line);
+           display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0 12px 0 0; font-weight:600; }
+  button, select, input[type=file] { background:#0b1220; color:var(--txt); border:1px solid var(--line);
+           border-radius:6px; padding:6px 10px; font-size:13px; cursor:pointer; }
+  button:hover { border-color:#64748b; }
+  button.primary { background:#2563eb; border-color:#2563eb; }
+  button.on { background:#2563eb; border-color:#2563eb; }
+  label.sw { font-size:12px; color:var(--muted); display:flex; gap:5px; align-items:center; cursor:pointer; }
+  .wrap { display:flex; height:calc(100vh - 52px); }
+  .stage { flex:1; background:#0b1220; overflow:hidden; position:relative; }
+  svg { width:100%; height:100%; display:block; touch-action:none; }
+  aside { width:300px; background:var(--panel); border-left:1px solid var(--line); padding:14px; overflow:auto; }
+  aside h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:14px 0 10px; }
+  aside h2:first-child { margin-top:0; }
+  .row { display:flex; gap:8px; margin-bottom:8px; align-items:center; }
+  .row label { width:74px; font-size:12px; color:var(--muted); }
+  .row input, .row select { flex:1; background:#0b1220; color:var(--txt); border:1px solid var(--line);
+           border-radius:6px; padding:6px 8px; font-size:13px; }
+  .pad { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+  .pad button { padding:8px 0; font-size:15px; }
+  .knobs button { padding:7px 0; font-size:13px; }
+  .knobs { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .stepsel { display:flex; gap:6px; align-items:center; margin:8px 0; font-size:12px; color:var(--muted); }
+  .stepsel button { padding:4px 10px; }
+  .hint { font-size:11px; color:var(--muted); line-height:1.5; margin-top:12px; }
+  .dim { font-size:12px; color:var(--txt); margin:6px 0; }
+  .dim b { color:#38bdf8; }
+  textarea { width:100%; height:170px; background:#0b1220; color:var(--txt); border:1px solid var(--line);
+           border-radius:6px; padding:8px; font-family:ui-monospace, monospace; font-size:11px; }
+  .sectorRect { cursor:move; }
+  .handle { cursor:nwse-resize; fill:#fff; stroke:#0b1220; stroke-width:1.5; }
+  .lbl { font-size:11px; fill:#0b1220; font-weight:600; pointer-events:none; }
+  .sel { stroke:#fff; stroke-width:3; }
+  .ref { fill:none; stroke:#475569; stroke-width:1.5; stroke-dasharray:5 4; }
+  .reftxt { fill:#64748b; font-size:11px; }
+  .dimtxt { fill:#fff; font-size:12px; font-weight:600; paint-order:stroke; stroke:#0b1220; stroke-width:3; pointer-events:none; }
+  .station { pointer-events:none; }
+  .stationRect { fill:#7c3aed; fill-opacity:0.32; stroke:#a78bfa; stroke-width:2; }
+  .stationLbl { fill:#ede9fe; font-size:10px; font-weight:600; text-anchor:middle; }
+  .stationMin { fill:#ddd6fe; font-size:9px; text-anchor:middle; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Edytor stref hali</h1>
+  <button id="add">+ Dodaj strefę</button>
+  <button id="del">Usuń</button>
+  <select id="addType" title="Typ nowej strefy">
+    <option value="komponent">komponent</option>
+    <option value="podmontaz">podmontaż</option>
+    <option value="magazyn">magazyn</option>
+    <option value="naprawa">naprawa</option>
+    <option value="czystosc">kącik czystości</option>
+  </select>
+  <button id="snap" title="Dociąga krawędzie do sąsiadów po puszczeniu (max 8px)">⌶ Przyciąganie</button>
+  <label class="sw">Tło planu: <input type="file" id="bg" accept="image/*" /></label>
+  <label class="sw">krycie <input type="range" id="bgop" min="0" max="100" value="55" style="width:70px"/></label>
+  <button class="primary" id="exp">Eksportuj ⤓</button>
+</header>
+<div class="wrap">
+  <div class="stage">
+    <svg id="svg" viewBox="0 0 1283 540" preserveAspectRatio="xMidYMid meet" tabindex="0">
+      <image id="bgimg" x="0" y="0" width="1283" height="540" opacity="0.55" style="display:none" preserveAspectRatio="none"></image>
+      <g id="ref"></g>
+      <g id="stations"></g>
+      <g id="sectors"></g>
+    </svg>
+  </div>
+  <aside>
+    <h2>Zaznaczona strefa</h2>
+    <div id="props" style="opacity:.4">
+      <div class="row"><label>Nazwa</label><input id="pLabel" /></div>
+      <div class="row"><label>Typ</label>
+        <select id="pType">
+          <option value="komponent">komponent</option>
+          <option value="podmontaz">podmontaż</option>
+          <option value="magazyn">magazyn</option>
+          <option value="naprawa">naprawa</option>
+          <option value="czystosc">kącik czystości</option>
+        </select>
+      </div>
+      <div class="row"><label>minuty</label><input id="pMin" type="number" placeholder="(opcjonalnie)" /></div>
+      <div class="dim">rozmiar: <b id="dimTxt">—</b></div>
+
+      <h2>Pozycja (knoby)</h2>
+      <div class="pad">
+        <span></span><button data-nudge="U">▲</button><span></span>
+        <button data-nudge="L">◀</button><button id="centerLine" title="wyśrodkuj w pionie na linii">linia</button><button data-nudge="R">▶</button>
+        <span></span><button data-nudge="D">▼</button><span></span>
+      </div>
+
+      <h2>Rozmiar (knoby)</h2>
+      <div class="knobs">
+        <button data-size="w-">szer −</button><button data-size="w+">szer +</button>
+        <button data-size="h-">wys −</button><button data-size="h+">wys +</button>
+      </div>
+      <div style="margin-top:6px"><button id="square" style="width:100%">⬛ Zrób kwadrat</button></div>
+
+      <div class="stepsel">krok:
+        <button data-step="1">1</button><button data-step="5" class="on">5</button><button data-step="10">10</button>
+        <span style="margin-left:auto">strzałki ← możesz też klawiaturą</span>
+      </div>
+
+      <h2>Wpisz dokładnie</h2>
+      <div class="row"><label>px środek→</label><input id="pPx" type="number" /></div>
+      <div class="row"><label>py środek↓</label><input id="pPy" type="number" /></div>
+      <div class="row"><label>pw szer→</label><input id="pPw" type="number" /></div>
+      <div class="row"><label>ph wys↓</label><input id="pPh" type="number" /></div>
+    </div>
+
+    <div class="hint">
+      Przeciągnij środek = przesuń, biały róg = zmień rozmiar (kotwiczy od lewego-górnego rogu).
+      Klawiatura: <b>strzałki</b> = pozycja, <b>Shift+strzałki</b> = rozmiar. px/py = środek,
+      pw/ph = rozmiar — te same liczby co w aplikacji. Wczytaj plan jako tło i obrysuj 1:1.
+    </div>
+    <div style="margin-top:12px">
+      <button class="primary" id="copy" style="display:none; width:100%; margin-bottom:6px">Kopiuj do schowka</button>
+      <textarea id="out" readonly style="display:none"></textarea>
+    </div>
+  </aside>
+</div>
+<script>
+const COLORS = { podmontaz:'#2563eb', komponent:'#d97706', magazyn:'#64748b', naprawa:'#dc2626', czystosc:'#16a34a' };
+const LINE_PY = 180; // oś linii w planie (py)
+
+let sectors = [
+  { label: 'Paleta NOK', type: 'magazyn', px: 58, py: 75, pw: 73, ph: 70 },
+  { label: 'Kącik czystości', type: 'czystosc', px: 260, py: 52, pw: 39, ph: 46 },
+  { label: 'Półka', type: 'komponent', px: 309, py: 65, pw: 54, ph: 72 },
+  { label: 'Ściana', type: 'komponent', px: 373, py: 58, pw: 68, ph: 55 },
+  { label: 'Kant', type: 'komponent', px: 440, py: 58, pw: 58, ph: 55 },
+  { label: 'PFB drzwi', type: 'komponent', px: 615, py: 63, pw: 58, ph: 72 },
+  { label: 'Podmontaż drzwi', type: 'podmontaz', minutes: 12, px: 701, py: 54, pw: 110, ph: 55 },
+  { label: 'Drzwi', type: 'komponent', px: 784, py: 101, pw: 51, ph: 74 },
+  { label: 'Dachy', type: 'komponent', px: 1048, py: 67, pw: 48, ph: 71 },
+  { label: 'Blendy', type: 'komponent', px: 1100, py: 61, pw: 50, ph: 55 },
+  { label: 'Blacha koryta', type: 'komponent', px: 58, py: 272, pw: 73, ph: 55 },
+  { label: 'Regał elem. złączne', type: 'magazyn', px: 68, py: 400, pw: 93, ph: 140 },
+  { label: 'Paleta NOK', type: 'magazyn', px: 192, py: 435, pw: 55, ph: 70 },
+  { label: 'Półka', type: 'komponent', px: 326, py: 333, pw: 46, ph: 91 },
+  { label: 'Ściana', type: 'komponent', px: 386, py: 321, pw: 65, ph: 65 },
+  { label: 'Strefa napraw', type: 'naprawa', px: 534, py: 330, pw: 157, ph: 235 },
+  { label: 'Drzwi', type: 'komponent', px: 782, py: 256, pw: 48, ph: 73 },
+  { label: 'Kącik czystości', type: 'czystosc', px: 740, py: 273, pw: 32, ph: 38 },
+  { label: 'Podmontaż drzwi', type: 'podmontaz', minutes: 12, px: 729, py: 349, pw: 56, ph: 109 },
+  { label: 'PFB drzwi', type: 'komponent', px: 745, py: 427, pw: 91, ph: 40 },
+  { label: 'Podłoga', type: 'komponent', px: 916, py: 301, pw: 65, ph: 65 },
+  { label: 'Sufit', type: 'komponent', px: 985, py: 301, pw: 65, ph: 65 },
+  { label: 'Rama', type: 'komponent', px: 857, py: 438, pw: 52, ph: 66 },
+  { label: 'Podmontaż podłogi i sufitu', type: 'podmontaz', minutes: 16, px: 940, py: 443, pw: 110, ph: 55 },
+  { label: 'Klapa pokrywy', type: 'komponent', px: 1045, py: 368, pw: 88, ph: 46 },
+  { label: 'Blacha dolna', type: 'komponent', px: 1031, py: 439, pw: 64, ph: 66 },
+  { label: 'Paleta NOK', type: 'magazyn', px: 1190, py: 429, pw: 60, ph: 70 },
+  { label: 'Kącik czystości', type: 'czystosc', px: 1243, py: 444, pw: 40, ph: 40 },
+];
+
+// Pozycje stacji (px) w tym samym ukladzie wsp. co strefy peryferyjne (plan->swiat):
+// px = z / 0.07 + 515. World z etapow: -21,-10,19,39 (rolotok od wejscia do wyjscia).
+const STATIONS = [
+  { px:215,  label:'E0 Podmontaż koryt', name:'Podmontaż koryt', minutes:null },
+  { px:372,  label:'E1 Montaż pionów',   name:'Montaż pionów',   minutes:15 },
+  { px:872,  label:'E2 Montaż drzwi',    name:'Montaż drzwi',    minutes:12 },
+  { px:1072, label:'E3 Montaż finalny',  name:'Montaż finalny',  minutes:16 },
+];
+
+const svg = document.getElementById('svg');
+const gSect = document.getElementById('sectors');
+const gRef = document.getElementById('ref');
+let sel = -1, step = 5, snapOn = false;
+
+function drawRef(){
+  let h = '';
+  // rolotok (od wejscia przed E0 do wyjscia za E3) w ukladzie planu
+  h += `<rect class="ref" x="109" y="150" width="1003" height="60"></rect>`;
+  // odcinek z buforem (przelot) miedzy E1 i E2
+  h += `<rect x="372" y="150" width="500" height="60" fill="#d97706" fill-opacity="0.12"></rect>`;
+  h += `<text class="reftxt" x="622" y="184" text-anchor="middle" fill="#b45309">odcinek z buforem (przelot)</text>`;
+  // znaczniki stacji
+  h += `<text class="reftxt" x="650" y="232" text-anchor="middle">LINIA — rolotok (pozycje stacji po zmianach)</text>`;
+  gRef.innerHTML = h;
+}
+drawRef();
+// Stale stanowiska montazowe (E0-E4) - nieedytowalne fioletowe prostokaty.
+// Pokazuja, gdzie jest stacja linii, zeby nie nakladac na nie stref.
+const STATION_W = 104, STATION_H = 74;
+function drawStations(){
+  const g = document.getElementById('stations');
+  let h = '';
+  STATIONS.forEach(s=>{
+    const x = s.px - STATION_W/2, y = LINE_PY - STATION_H/2;
+    h += `<rect class="stationRect" x="${x}" y="${y}" width="${STATION_W}" height="${STATION_H}" rx="3"></rect>`;
+    h += `<text class="stationLbl" x="${s.px}" y="${LINE_PY-9}">${s.name}</text>`;
+    if(s.minutes) h += `<text class="stationMin" x="${s.px}" y="${LINE_PY+10}">${s.minutes} min</text>`;
+  });
+  g.innerHTML = h;
+}
+drawStations();
+
+function toSvg(evt){
+  const p = svg.createSVGPoint(); p.x = evt.clientX; p.y = evt.clientY;
+  return p.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+function render(){
+  gSect.innerHTML = '';
+  sectors.forEach((s,i)=>{
+    const x = s.px - s.pw/2, y = s.py - s.ph/2;
+    const c = COLORS[s.type] || '#64748b';
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.innerHTML =
+      `<rect class="sectorRect ${i===sel?'sel':''}" data-i="${i}" x="${x}" y="${y}" width="${s.pw}" height="${s.ph}"
+         fill="${c}" fill-opacity="0.45" stroke="${c}" stroke-width="2" rx="2"></rect>
+       <text class="lbl" x="${s.px}" y="${s.py}" text-anchor="middle" dominant-baseline="middle">${s.label}</text>`
+      + (i===sel ? `<rect class="handle" data-h="${i}" x="${x+s.pw-9}" y="${y+s.ph-9}" width="14" height="14"></rect>
+         <text class="dimtxt" x="${s.px}" y="${y-6}" text-anchor="middle">${Math.round(s.pw)} × ${Math.round(s.ph)}${Math.abs(s.pw-s.ph)<=1?'  (kwadrat)':''}</text>` : '');
+    gSect.appendChild(g);
+  });
+}
+
+let drag = null; // {i, mode, ox,oy} lub {i,'resize', ax,ay}
+svg.addEventListener('pointerdown', e=>{
+  const t = e.target;
+  if (t.classList.contains('handle')){
+    const i = +t.dataset.h; sel = i; const s = sectors[i];
+    drag = { i, mode:'resize', ax:s.px - s.pw/2, ay:s.py - s.ph/2 }; // kotwica = lewy-gorny rog (staly)
+    svg.setPointerCapture(e.pointerId); render(); updatePanel();
+  } else if (t.classList.contains('sectorRect')){
+    const i = +t.dataset.i; sel = i; const p = toSvg(e); const s = sectors[i];
+    drag = { i, mode:'move', ox:p.x - s.px, oy:p.y - s.py };
+    svg.setPointerCapture(e.pointerId); render(); updatePanel();
+  } else { sel = -1; render(); updatePanel(); }
+  svg.focus();
+});
+
+svg.addEventListener('pointermove', e=>{
+  if(!drag) return;
+  const p = toSvg(e); const s = sectors[drag.i];
+  if (drag.mode==='move'){
+    s.px = Math.round(p.x - drag.ox); s.py = Math.round(p.y - drag.oy);
+  } else { // resize: lewy-gorny rog staly, prawy-dolny podaza za kursorem
+    const w = Math.max(12, Math.round(p.x - drag.ax));
+    const h = Math.max(12, Math.round(p.y - drag.ay));
+    s.pw = w; s.ph = h; s.px = Math.round(drag.ax + w/2); s.py = Math.round(drag.ay + h/2);
+  }
+  render(); updatePanel();
+});
+svg.addEventListener('pointerup', ()=>{
+  if(drag && snapOn) snap(drag.i);
+  drag=null; render(); updatePanel();
+});
+
+// Przyciaganie krawedzi — TYLKO po puszczeniu i TYLKO jedno najblizsze
+// dociagniecie na os (max 8px), zeby element nigdy nie "teleportowal".
+function snap(i){
+  const T=8, s=sectors[i];
+  const L=s.px-s.pw/2, R=s.px+s.pw/2, Tp=s.py-s.ph/2, B=s.py+s.ph/2;
+  let bestX=0, bx=T+1, bestY=0, by=T+1;
+  sectors.forEach((o,j)=>{ if(j===i) return;
+    const oL=o.px-o.pw/2, oR=o.px+o.pw/2, oT=o.py-o.ph/2, oB=o.py+o.ph/2;
+    [[L,oR],[L,oL],[R,oL],[R,oR]].forEach(([a,b])=>{ const d=b-a; if(Math.abs(d)<bx){ bx=Math.abs(d); bestX=d; } });
+    [[Tp,oB],[Tp,oT],[B,oT],[B,oB]].forEach(([a,b])=>{ const d=b-a; if(Math.abs(d)<by){ by=Math.abs(d); bestY=d; } });
+  });
+  if(bx<=T) s.px=Math.round(s.px+bestX);
+  if(by<=T) s.py=Math.round(s.py+bestY);
+}
+
+// ---- Panel / knoby ----
+function updatePanel(){
+  const box = document.getElementById('props');
+  if(sel<0){ box.style.opacity=.4; dimTxt.textContent='—'; return; } box.style.opacity=1;
+  const s = sectors[sel];
+  pLabel.value=s.label; pType.value=s.type; pMin.value=s.minutes??'';
+  pPx.value=s.px; pPy.value=s.py; pPw.value=s.pw; pPh.value=s.ph;
+  dimTxt.textContent = `${s.pw} × ${s.ph}` + (Math.abs(s.pw-s.ph)<=1 ? '  ✓ kwadrat' : '');
+}
+['pLabel','pType','pMin','pPx','pPy','pPw','pPh'].forEach(id=>{
+  document.getElementById(id).addEventListener('input', ()=>{
+    if(sel<0) return; const s=sectors[sel];
+    s.label=pLabel.value; s.type=pType.value;
+    const m=parseFloat(pMin.value); if(isNaN(m)) delete s.minutes; else s.minutes=m;
+    s.px=+pPx.value||s.px; s.py=+pPy.value||s.py;
+    s.pw=Math.max(12,+pPw.value||s.pw); s.ph=Math.max(12,+pPh.value||s.ph);
+    render(); dimTxt.textContent=`${s.pw} × ${s.ph}`+(Math.abs(s.pw-s.ph)<=1?'  ✓ kwadrat':'');
+  });
+});
+
+function nudge(dir){ if(sel<0) return; const s=sectors[sel];
+  if(dir==='L') s.px-=step; if(dir==='R') s.px+=step; if(dir==='U') s.py-=step; if(dir==='D') s.py+=step;
+  render(); updatePanel();
+}
+function sizeChange(op){ if(sel<0) return; const s=sectors[sel];
+  if(op==='w-') s.pw=Math.max(12,s.pw-step); if(op==='w+') s.pw+=step;
+  if(op==='h-') s.ph=Math.max(12,s.ph-step); if(op==='h+') s.ph+=step;
+  render(); updatePanel();
+}
+document.querySelectorAll('[data-nudge]').forEach(b=>b.onclick=()=>nudge(b.dataset.nudge));
+document.querySelectorAll('[data-size]').forEach(b=>b.onclick=()=>sizeChange(b.dataset.size));
+document.getElementById('square').onclick=()=>{ if(sel<0) return; const s=sectors[sel];
+  const m=Math.round((s.pw+s.ph)/2); s.pw=m; s.ph=m; render(); updatePanel(); };
+document.getElementById('centerLine').onclick=()=>{ if(sel<0) return; const s=sectors[sel];
+  // wyśrodkuj tuż przy linii po właściwej stronie
+  s.py = s.py < LINE_PY ? LINE_PY - 35 - s.ph/2 : LINE_PY + 35 + s.ph/2; render(); updatePanel(); };
+document.querySelectorAll('[data-step]').forEach(b=>b.onclick=()=>{
+  step=+b.dataset.step; document.querySelectorAll('[data-step]').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+});
+
+// Klawiatura
+svg.addEventListener('keydown', e=>{
+  if(sel<0) return; const s=sectors[sel]; const k=e.key;
+  if(!k.startsWith('Arrow')) return; e.preventDefault();
+  if(e.shiftKey){
+    if(k==='ArrowLeft') s.pw=Math.max(12,s.pw-step); if(k==='ArrowRight') s.pw+=step;
+    if(k==='ArrowUp') s.ph=Math.max(12,s.ph-step); if(k==='ArrowDown') s.ph+=step;
+  } else {
+    if(k==='ArrowLeft') s.px-=step; if(k==='ArrowRight') s.px+=step;
+    if(k==='ArrowUp') s.py-=step; if(k==='ArrowDown') s.py+=step;
+  }
+  render(); updatePanel();
+});
+
+document.getElementById('snap').onclick=function(){ snapOn=!snapOn; this.classList.toggle('on',snapOn); };
+document.getElementById('add').onclick=()=>{
+  const type=document.getElementById('addType').value;
+  sectors.push({label:'Nowa', type, px:500, py:270, pw:60, ph:60}); sel=sectors.length-1; render(); updatePanel(); svg.focus();
+};
+document.getElementById('del').onclick=()=>{ if(sel<0) return; sectors.splice(sel,1); sel=-1; render(); updatePanel(); };
+
+document.getElementById('bg').onchange=e=>{
+  const f=e.target.files[0]; if(!f) return; const r=new FileReader();
+  r.onload=()=>{ const img=document.getElementById('bgimg'); img.setAttribute('href', r.result); img.style.display='block'; };
+  r.readAsDataURL(f);
+};
+document.getElementById('bgop').oninput=e=>{ document.getElementById('bgimg').setAttribute('opacity', e.target.value/100); };
+
+document.getElementById('exp').onclick=()=>{
+  const lines = sectors.map(s=>{
+    const min = s.minutes!=null ? `, minutes: ${s.minutes}` : '';
+    return `  { label: '${s.label.replace(/'/g,"\\'")}', type: '${s.type}'${min}, px: ${Math.round(s.px)}, py: ${Math.round(s.py)}, pw: ${Math.round(s.pw)}, ph: ${Math.round(s.ph)} },`;
+  }).join('\n');
+  const ta=document.getElementById('out'); ta.value = `const PLAN_SECTORS = [\n${lines}\n];`;
+  ta.style.display='block'; document.getElementById('copy').style.display='block';
+};
+document.getElementById('copy').onclick=function(){
+  const ta=document.getElementById('out'); ta.select(); document.execCommand('copy');
+  this.textContent='Skopiowano ✓'; setTimeout(()=>this.textContent='Kopiuj do schowka',1200);
+};
+
+render(); updatePanel();
+</script>
+</body>
+</html>
