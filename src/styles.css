@@ -265,6 +265,50 @@ select:focus {
   text-align: right;
 }
 
+.worker-effect-grid {
+  display: grid;
+  grid-template-columns: 1fr 82px;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.worker-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 58px 74px;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.worker-row > span {
+  min-width: 0;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worker-row input {
+  min-height: 34px;
+  padding: 6px 8px;
+  text-align: right;
+}
+
+.worker-row strong {
+  color: #111827;
+  font-size: 0.82rem;
+  text-align: right;
+}
+
+.worker-row small {
+  grid-column: 2 / span 2;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-align: right;
+}
+
 .time-breakdown {
   display: grid;
   gap: 8px;
@@ -994,6 +1038,17 @@ select:focus {
 
   .stage-form {
     grid-template-columns: 1fr;
+  }
+
+  .worker-effect-grid,
+  .worker-row {
+    grid-template-columns: 1fr;
+  }
+
+  .worker-row strong,
+  .worker-row small {
+    grid-column: auto;
+    text-align: left;
   }
 
   .stage-form-number,

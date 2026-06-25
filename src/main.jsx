@@ -34,6 +34,11 @@ import './styles.css';
 // Domyslny czas pracy kazdego etapu. Zmiana tej jednej wartosci ustawia czas
 // wszystkich etapow startowych oraz nowych etapow dodawanych w interfejsie.
 const DEFAULT_STAGE_SECONDS = 10;
+const DEFAULT_WORKER_EFFECT = {
+  mode: 'percent',
+  value: 15,
+};
+const MIN_EFFECTIVE_STAGE_SECONDS = 0.1;
 
 const baseStages = [
   {
@@ -109,6 +114,31 @@ const formatTime = (seconds) => {
   return `${minutes} min ${rest} s`;
 };
 
+const clampPercent = (value) => Math.min(95, Math.max(0, clampNumber(value, 0)));
+
+const getEffectiveStageDuration = (baseDuration, workerCount, workerEffect) => {
+  const safeBase = Math.max(clampNumber(baseDuration, DEFAULT_STAGE_SECONDS), MIN_EFFECTIVE_STAGE_SECONDS);
+  const workers = Math.max(1, Math.round(Number(workerCount)) || 1);
+  const extraWorkers = Math.max(0, workers - 1);
+  const effectValue = clampNumber(workerEffect?.value, DEFAULT_WORKER_EFFECT.value);
+
+  if (extraWorkers === 0 || effectValue <= 0) return safeBase;
+
+  if (workerEffect?.mode === 'seconds') {
+    return Math.max(MIN_EFFECTIVE_STAGE_SECONDS, safeBase - extraWorkers * effectValue);
+  }
+
+  const ratio = 1 - clampPercent(effectValue) / 100;
+  return Math.max(MIN_EFFECTIVE_STAGE_SECONDS, safeBase * Math.pow(ratio, extraWorkers));
+};
+
+const getWorkerImprovementLabel = (baseDuration, effectiveDuration) => {
+  const saved = Math.max(0, baseDuration - effectiveDuration);
+  if (saved <= 0.0001) return 'bez zmiany';
+  const pct = baseDuration > 0 ? Math.round((saved / baseDuration) * 100) : 0;
+  return `-${formatTime(saved)} (${pct}%)`;
+};
+
 // Liczy realne blokady na podstawie harmonogramu (jednostka w stanie ustalonym).
 // Dla kazdego etapu: ile czesc czeka na WEJSCIE (stacja zajeta) i ile jest
 // ZABLOKOWANA za etapem (czeka, az zwolni sie dalej), + czas przejazdu.
@@ -118,7 +148,9 @@ const buildBottleneckRows = (stages, schedule) => {
   const rows = stages.map((stage, i) => ({
     index: i,
     name: stage.name || `Etap ${i}`,
+    baseDuration: Math.max(stage.baseDuration ?? stage.duration ?? 0, 0),
     duration: Math.max(stage.duration ?? 0, 0),
+    workerCount: stage.workerCount ?? null,
     travelOut: null,
     egressBlock: 0,
   }));
@@ -151,7 +183,11 @@ const renderTimesReportHtml = ({ rows, cycleTime, launchInterval, totalTime, thr
     if (r.egressBlock > 0.05) blocks.push(`Miedzy Etapem ${r.index} a ${r.index + 1}: czesc zablokowana <b>${f(r.egressBlock)}</b> (czeka, az zwolni sie dalej).`);
   });
   const totalWait = rows.reduce((a, r) => a + r.egressBlock, 0);
-  const stageRowsHtml = rows.map((r) => `<tr${r.index === bnIdx ? ' class="bn"' : ''}><td>${r.index}</td><td>${esc(r.name)}</td><td>${f(r.duration)}</td><td>${r.travelOut != null ? f(r.travelOut) : '\u2014'}</td><td>${r.egressBlock > 0.05 ? f(r.egressBlock) : '\u2014'}</td><td>${maxDur > 0 ? Math.round(Math.min(100, r.duration / maxDur * 100)) : 0}%</td></tr>`).join('');
+  const stageRowsHtml = rows.map((r) => {
+    const saved = Math.max(0, r.baseDuration - r.duration);
+    const savedLabel = saved > 0.05 ? `${f(saved)} (${r.baseDuration > 0 ? Math.round(saved / r.baseDuration * 100) : 0}%)` : '\u2014';
+    return `<tr${r.index === bnIdx ? ' class="bn"' : ''}><td>${r.index}</td><td>${esc(r.name)}</td><td>${r.workerCount ?? '\u2014'}</td><td>${f(r.baseDuration)}</td><td>${f(r.duration)}</td><td>${savedLabel}</td><td>${r.travelOut != null ? f(r.travelOut) : '\u2014'}</td><td>${r.egressBlock > 0.05 ? f(r.egressBlock) : '\u2014'}</td><td>${maxDur > 0 ? Math.round(Math.min(100, r.duration / maxDur * 100)) : 0}%</td></tr>`;
+  }).join('');
   const blocksHtml = blocks.length ? `<ul>${blocks.map((b) => `<li>${b}</li>`).join('')}</ul>` : `<p class="ok">Brak istotnych blokad \u2014 przy obecnych czasach linia jest zbalansowana.</p>`;
   return `<!DOCTYPE html><html lang="pl"><head><meta charset="utf-8"><title>Raport czasow linii \u2014 paczkomat</title>
 <style>
@@ -178,7 +214,7 @@ const renderTimesReportHtml = ({ rows, cycleTime, launchInterval, totalTime, thr
     <div class="card"><div class="l">Na zmiane (8h)</div><div class="v">${Math.round(throughputPerShift)} szt</div></div>
   </div>
   <h2>Etapy i czasy</h2>
-  <table><thead><tr><th>#</th><th>Etap</th><th>Czas montazu</th><th>Przejazd do nastepnego</th><th>Blokada za etapem</th><th>Wykorzystanie</th></tr></thead><tbody>${stageRowsHtml}</tbody></table>
+  <table><thead><tr><th>#</th><th>Etap</th><th>Prac.</th><th>Czas bazowy</th><th>Czas po obsadzie</th><th>Oszczednosc</th><th>Przejazd do nastepnego</th><th>Blokada za etapem</th><th>Wykorzystanie</th></tr></thead><tbody>${stageRowsHtml}</tbody></table>
   <p class="sub" style="margin-top:4px">Wykorzystanie pokazuje, jak bardzo stanowisko jest obciążone względem najbardziej obciążonego (100%). Stanowisko ze 100% narzuca tempo linii; mniej = ma zapas i czeka. Najlepiej, gdy wszędzie jest blisko 100% — praca równo rozłożona.</p>
   <h2>Blokady / oczekiwania</h2>
   ${blocksHtml}
@@ -187,7 +223,10 @@ const renderTimesReportHtml = ({ rows, cycleTime, launchInterval, totalTime, thr
 </body></html>`;
 };
 
-const CONVEYOR_WIDTH = 6.2;
+// Rolotok ma byc tylko lekko szerszy od jednej jadacej polowy paczkomatu.
+// Podstawa finalna celowo nie jest tu brana pod uwage, bo bedzie przerabiana
+// osobno w kolejnym kroku projektu.
+const CONVEYOR_WIDTH = 3.0;
 const CONVEYOR_RAIL_OFFSET = CONVEYOR_WIDTH / 2 - 0.35;
 const ROLLER_LENGTH = CONVEYOR_WIDTH - 0.85;
 const CONVEYOR_ELEVATION = 1.3;
@@ -243,9 +282,9 @@ const TUNE = {
   canopyOffset: [0, 0.1, 0.9],
   // Docelowa wysokosc (Y) sciany tylniej. Ujemne = nizej (na DOLE / z TYLU).
   // Sciana jest automatycznie sprowadzana w dol na ta wysokosc i wjezdza od dolu.
-  backWallY: -0.8,
+  backWallY: -0.85,
   // O ile gleboko pod spodem startuje sciana tylnia (montaz "od dolu").
-  backWallDrop: 2.2,
+  backWallDrop: 1.0,
   // Obrot sciany tylniej (radiany) - byla "do gory nogami", wiec domyslnie PI
   // (180 stopni). Gdyby trzeba bylo innej osi, daj znac.
   backWallRotX: Math.PI,
@@ -295,7 +334,10 @@ const TUNE = {
   standingY: -0.4,
   // Wysokosc paczkomatu podczas montazu poziomego (etapy lezace). Lekko podniesione,
   // zeby plecy nie wpadaly w rolki. Wczesniej na stale 0.34.
-  horizontalLift: 0.4,
+  horizontalLift: 0.5,
+  // Wysokosc koryt lezacych PRZED obrotem do pionu: wejscie, etap 0 i dojazd
+  // do etapu 1. Ma byc na rolkach bez lewitacji, ale bez wpadania w rolotok.
+  preTurnHorizontalLift: 0.36,
   // Obrot CALEJ czesci wokol dlugiej osi (radiany). Math.PI = czesc staje
   // prawidlowo (nie do gory nogami). Daj 0, gdyby przegielo w druga strone.
   partsRotY: Math.PI,
@@ -1101,7 +1143,7 @@ function StageEditor({ stages, updateStage, addStage, removeStage, resetStages }
               />
             </label>
             <label>
-              Czas [s]
+              Czas bazowy [s]
               <input
                 type="number"
                 min="0"
@@ -1200,25 +1242,60 @@ function TravelTimeEditor({ stages, travelTimes, updateTravelTime }) {
   );
 }
 
-function WorkersEditor({ stages, workersPerStation, updateWorkerCount }) {
+function WorkersEditor({
+  stages,
+  workersPerStation,
+  updateWorkerCount,
+  workerEffect,
+  updateWorkerEffect,
+}) {
   if (!stages.length) return null;
 
   return (
     <div className="travel-editor">
       <div className="mini-heading">
         <span>Pracownicy</span>
-        <strong>Liczba na stanowisko</strong>
+        <strong>Liczba na stanowisko i wplyw na czas</strong>
       </div>
-      {stages.map((stage, index) => (
-        <label className="travel-row" key={stage.id}>
-          <span>{stage.name || `Etap ${index}`}</span>
+      <div className="worker-effect-grid">
+        <label>
+          Tryb
+          <select
+            value={workerEffect.mode}
+            onChange={(event) => updateWorkerEffect({ mode: event.target.value })}
+          >
+            <option value="percent">% szybciej za kazdego dodatkowego</option>
+            <option value="seconds">Sekundy mniej za kazdego dodatkowego</option>
+          </select>
+        </label>
+        <label>
+          Wartosc
           <input
             type="number"
             min="0"
+            max={workerEffect.mode === 'percent' ? 95 : undefined}
+            step={workerEffect.mode === 'percent' ? 1 : 0.5}
+            value={workerEffect.value}
+            onChange={(event) => updateWorkerEffect({ value: event.target.value })}
+          />
+        </label>
+      </div>
+      {stages.map((stage, index) => (
+        <label className="worker-row" key={stage.id}>
+          <span>{stage.name || `Etap ${index}`}</span>
+          <input
+            type="number"
+            min="1"
             step="1"
             value={workersPerStation[index] ?? 1}
             onChange={(event) => updateWorkerCount(index, event.target.value)}
           />
+          <strong title={`Bazowo: ${formatTime(stage.baseDuration ?? stage.duration)}`}>
+            {formatTime(stage.duration)}
+          </strong>
+          <small>
+            {getWorkerImprovementLabel(stage.baseDuration ?? stage.duration, stage.duration)}
+          </small>
         </label>
       ))}
     </div>
@@ -1236,6 +1313,8 @@ function Metrics({
   updateTravelTime,
   workersPerStation,
   updateWorkerCount,
+  workerEffect,
+  updateWorkerEffect,
   throughputPerHour,
   throughputPerShift,
   stageUtilization,
@@ -1337,7 +1416,13 @@ function Metrics({
 
       <TravelTimeEditor stages={stages} travelTimes={travelTimes} updateTravelTime={updateTravelTime} />
 
-      <WorkersEditor stages={stages} workersPerStation={workersPerStation} updateWorkerCount={updateWorkerCount} />
+      <WorkersEditor
+        stages={stages}
+        workersPerStation={workersPerStation}
+        updateWorkerCount={updateWorkerCount}
+        workerEffect={workerEffect}
+        updateWorkerEffect={updateWorkerEffect}
+      />
 
       <button
         type="button"
@@ -1351,8 +1436,15 @@ function Metrics({
         {stages.map((stage) => (
           <div key={stage.id} className="breakdown-row">
             <span style={{ backgroundColor: stage.color }} />
-            <p>{stage.name || 'Bez nazwy'}</p>
-            <strong>{formatTime(clampNumber(stage.duration))}</strong>
+            <p>
+              {stage.name || 'Bez nazwy'}
+              {(stage.baseDuration ?? stage.duration) !== stage.duration
+                ? ` (${stage.workerCount ?? 1} prac.)`
+                : ''}
+            </p>
+            <strong title={`Bazowo: ${formatTime(clampNumber(stage.baseDuration ?? stage.duration))}`}>
+              {formatTime(clampNumber(stage.duration))}
+            </strong>
           </div>
         ))}
       </div>
@@ -4091,7 +4183,28 @@ function ThreeProductionScene({
         const standingLiftProgress = isStandingStage
           ? easeOut(THREE.MathUtils.clamp((finalizeProgress - 0.1) / 0.35, 0, 1))
           : 0;
-        const horizontalLift = TUNE.horizontalLift ?? 0.34;
+        const baseHorizontalLift = TUNE.horizontalLift ?? 0.34;
+        const preTurnHorizontalLift = TUNE.preTurnHorizontalLift ?? baseHorizontalLift;
+        const structureProgress = stage?.icon === 'shelves'
+          ? THREE.MathUtils.clamp((poseUnit.assemblyProgress ?? poseUnit.progress ?? 0) / 100, 0, 1)
+          : 0;
+        const troughTurnProgress = stage?.icon === 'shelves'
+          ? easeOut(THREE.MathUtils.clamp(
+            structureProgress / (TUNE.troughTurn?.portion ?? 0.2),
+            0,
+            1,
+          ))
+          : 0;
+        let horizontalLift = (
+          poseUnit.mode === 'entry'
+          || stage?.icon === 'locks'
+          || (poseUnit.mode === 'travel' && stagesNow[poseUnit.travelFrom]?.icon === 'locks')
+        )
+          ? preTurnHorizontalLift
+          : baseHorizontalLift;
+        if (stage?.icon === 'shelves') {
+          horizontalLift = THREE.MathUtils.lerp(preTurnHorizontalLift, baseHorizontalLift, troughTurnProgress);
+        }
         const conveyorLift = isStandingStage
           ? THREE.MathUtils.lerp(horizontalLift, TUNE.standingY, standingLiftProgress)
           : horizontalLift;
@@ -4502,6 +4615,7 @@ function App() {
   speedRef.current = speedMultiplier;
   const [travelTimes, setTravelTimes] = useState(() => getDefaultTravelTimes(baseStages.length));
   const [workersPerStation, setWorkersPerStation] = useState(() => baseStages.map(() => 1));
+  const [workerEffect, setWorkerEffect] = useState(DEFAULT_WORKER_EFFECT);
   const [stopwatchRunning, setStopwatchRunning] = useState(false);
   const [stopwatchElapsed, setStopwatchElapsed] = useState(0);
   const [measuredPartLength, setMeasuredPartLength] = useState(
@@ -4510,7 +4624,7 @@ function App() {
   const stopwatchStartRef = useRef(0);
   const stopwatchBaseRef = useRef(0);
 
-  const normalizedStages = useMemo(
+  const normalizedBaseStages = useMemo(
     () =>
       stages.map((stage) => ({
         ...stage,
@@ -4520,16 +4634,39 @@ function App() {
   );
 
   const productionCount = Math.max(1, Math.floor(clampNumber(unitCount, 1)));
+  const normalizedWorkers = useMemo(
+    () => normalizedBaseStages.map((_, i) => {
+      const v = Math.round(Number(workersPerStation[i]));
+      return Number.isFinite(v) ? Math.max(1, v) : 1;
+    }),
+    [normalizedBaseStages, workersPerStation],
+  );
+  const normalizedWorkerEffect = useMemo(
+    () => ({
+      mode: workerEffect.mode === 'seconds' ? 'seconds' : 'percent',
+      value: workerEffect.mode === 'percent'
+        ? clampPercent(workerEffect.value)
+        : clampNumber(workerEffect.value, 0),
+    }),
+    [workerEffect],
+  );
+  const normalizedStages = useMemo(
+    () =>
+      normalizedBaseStages.map((stage, index) => ({
+        ...stage,
+        baseDuration: stage.duration,
+        workerCount: normalizedWorkers[index],
+        duration: getEffectiveStageDuration(
+          stage.duration,
+          normalizedWorkers[index],
+          normalizedWorkerEffect,
+        ),
+      })),
+    [normalizedBaseStages, normalizedWorkerEffect, normalizedWorkers],
+  );
   const normalizedTravelTimes = useMemo(
     () => normalizeTravelTimes(travelTimes, normalizedStages.length),
     [normalizedStages.length, travelTimes],
-  );
-  const normalizedWorkers = useMemo(
-    () => normalizedStages.map((_, i) => {
-      const v = Math.round(Number(workersPerStation[i]));
-      return Number.isFinite(v) ? Math.max(0, v) : 1;
-    }),
-    [normalizedStages, workersPerStation],
   );
   const productionSchedule = useMemo(() => {
     const schedule = buildProductionSchedule(
@@ -4649,9 +4786,17 @@ function App() {
   const updateWorkerCount = (index, value) => {
     setWorkersPerStation((current) => {
       const next = normalizedStages.map((_, i) => current[i] ?? 1);
-      next[index] = value;
+      const parsed = Math.round(Number(value));
+      next[index] = Number.isFinite(parsed) ? Math.max(1, parsed) : 1;
       return next;
     });
+  };
+
+  const updateWorkerEffect = (patch) => {
+    setWorkerEffect((current) => ({
+      ...current,
+      ...patch,
+    }));
   };
 
   const toggleStopwatch = () => {
@@ -4713,6 +4858,8 @@ function App() {
         updateTravelTime={updateTravelTime}
         workersPerStation={workersPerStation}
         updateWorkerCount={updateWorkerCount}
+        workerEffect={normalizedWorkerEffect}
+        updateWorkerEffect={updateWorkerEffect}
         throughputPerHour={throughputPerHour}
         throughputPerShift={throughputPerShift}
         stageUtilization={stageUtilization}
