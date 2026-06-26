@@ -25,20 +25,39 @@ import {
   Settings2,
   TimerReset,
   Trash2,
+  Truck,
   Zap,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
 import './styles.css';
-
-// Domyslny czas pracy kazdego etapu. Zmiana tej jednej wartosci ustawia czas
-// wszystkich etapow startowych oraz nowych etapow dodawanych w interfejsie.
-const DEFAULT_STAGE_SECONDS = 10;
-const DEFAULT_WORKER_EFFECT = {
-  mode: 'percent',
-  value: 15,
-};
-const MIN_EFFECTIVE_STAGE_SECONDS = 0.1;
+import {
+  DEFAULT_STAGE_SECONDS,
+  DEFAULT_WORKER_EFFECT,
+  MIN_EFFECTIVE_STAGE_SECONDS,
+  clampNumber,
+  clampPercent,
+  getEffectiveStageDuration,
+  CONVEYOR_UNITS_PER_SECOND,
+  MIN_TRAVEL_SECONDS,
+  ENTRY_TRAVEL_SECONDS,
+  COMPLETED_DISPLAY_SECONDS,
+  ASSEMBLY_LENGTH,
+  MODEL_RENDER_SCALE,
+  TUNE,
+  isOfflineEnabled,
+  getOfflineServerCount,
+  getOfflineStageIndex,
+  getConveyorFinalIndex,
+  buildLinePoints,
+  getTravelDurations,
+  DEFAULT_TRAVEL_SECONDS,
+  DEFAULT_TRAVEL_TIMES,
+  getDefaultTravelTimes,
+  normalizeTravelTimes,
+  buildProductionSchedule,
+  validateScheduleReservations,
+} from './simulation.js';
 
 const baseStages = [
   {
@@ -64,10 +83,17 @@ const baseStages = [
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 3: połączenie na podstawie, dachy',
+    name: 'Etap 3: włożenie w podstawę',
     duration: DEFAULT_STAGE_SECONDS,
     color: '#7c3aed',
     icon: 'finalize',
+  },
+  {
+    id: crypto.randomUUID(),
+    name: 'Etap 4: nitowanie + dach (poza linią)',
+    duration: DEFAULT_STAGE_SECONDS,
+    color: '#db2777',
+    icon: 'offline',
   },
 ];
 
@@ -81,6 +107,7 @@ const iconOptions = [
   { value: 'roof', label: 'Dach' },
   { value: 'lockers', label: 'Skrytki' },
   { value: 'finalize', label: 'Polaczenie, plecy i dachy' },
+  { value: 'offline', label: 'Wykonczenie poza linia (palety)' },
   { value: 'electronics', label: 'Elektronika' },
   { value: 'test', label: 'Test' },
   { value: 'box', label: 'Montaz' },
@@ -96,15 +123,10 @@ const stageIcons = {
   roof: House,
   lockers: Grid3X3,
   finalize: House,
+  offline: Truck,
   electronics: Zap,
   test: CheckCircle2,
   box: Box,
-};
-
-const clampNumber = (value, fallback = 0) => {
-  const parsed = Number(value);
-  if (Number.isNaN(parsed) || parsed < 0) return fallback;
-  return parsed;
 };
 
 const formatTime = (seconds) => {
@@ -112,24 +134,6 @@ const formatTime = (seconds) => {
   const minutes = Math.floor(seconds / 60);
   const rest = Math.round(seconds % 60);
   return `${minutes} min ${rest} s`;
-};
-
-const clampPercent = (value) => Math.min(95, Math.max(0, clampNumber(value, 0)));
-
-const getEffectiveStageDuration = (baseDuration, workerCount, workerEffect) => {
-  const safeBase = Math.max(clampNumber(baseDuration, DEFAULT_STAGE_SECONDS), MIN_EFFECTIVE_STAGE_SECONDS);
-  const workers = Math.max(1, Math.round(Number(workerCount)) || 1);
-  const extraWorkers = Math.max(0, workers - 1);
-  const effectValue = clampNumber(workerEffect?.value, DEFAULT_WORKER_EFFECT.value);
-
-  if (extraWorkers === 0 || effectValue <= 0) return safeBase;
-
-  if (workerEffect?.mode === 'seconds') {
-    return Math.max(MIN_EFFECTIVE_STAGE_SECONDS, safeBase - extraWorkers * effectValue);
-  }
-
-  const ratio = 1 - clampPercent(effectValue) / 100;
-  return Math.max(MIN_EFFECTIVE_STAGE_SECONDS, safeBase * Math.pow(ratio, extraWorkers));
 };
 
 const getWorkerImprovementLabel = (baseDuration, effectiveDuration) => {
@@ -145,15 +149,26 @@ const getWorkerImprovementLabel = (baseDuration, effectiveDuration) => {
 const buildBottleneckRows = (stages, schedule) => {
   const units = schedule?.leadUnits ?? [];
   const unit = units[units.length - 1];
-  const rows = stages.map((stage, i) => ({
-    index: i,
-    name: stage.name || `Etap ${i}`,
-    baseDuration: Math.max(stage.baseDuration ?? stage.duration ?? 0, 0),
-    duration: Math.max(stage.duration ?? 0, 0),
-    workerCount: stage.workerCount ?? null,
-    travelOut: null,
-    egressBlock: 0,
-  }));
+  const offlineStageIndex = schedule?.offlineStageIndex ?? -1;
+  const offlineServerCount = Math.max(schedule?.offlineServerCount ?? 1, 1);
+  const rows = stages.map((stage, i) => {
+    const duration = Math.max(stage.duration ?? 0, 0);
+    // Liczba rownoleglych stanowisk (etap offline = N), oraz EFEKTYWNY czas =
+    // czas / liczba stanowisk (na nim opiera sie waskie gardlo i wykorzystanie).
+    const servers = i === offlineStageIndex ? offlineServerCount : 1;
+    return {
+      index: i,
+      name: stage.name || `Etap ${i}`,
+      baseDuration: Math.max(stage.baseDuration ?? stage.duration ?? 0, 0),
+      duration,
+      servers,
+      effectiveDuration: duration / servers,
+      isOffline: i === offlineStageIndex,
+      workerCount: stage.workerCount ?? null,
+      travelOut: null,
+      egressBlock: 0,
+    };
+  });
   if (unit?.segments) {
     const segs = unit.segments;
     rows.forEach((row) => {
@@ -174,11 +189,16 @@ const renderTimesReportHtml = ({ rows, cycleTime, launchInterval, totalTime, thr
   const esc = (v) => String(v).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   const f = formatTime;
   const now = new Date().toLocaleString('pl-PL');
+  // Waskie gardlo liczone z EFEKTYWNEGO czasu = czas / liczba stanowisk.
+  // Etap offline ma N rownoleglych stanowisk, wiec jego efektywny czas jest N x
+  // mniejszy (2 stanowiska = 2x przepustowosc).
+  const eff = (r) => (r.effectiveDuration ?? r.duration);
   let bnIdx = -1, maxDur = -1;
-  rows.forEach((r) => { if (r.duration > maxDur) { maxDur = r.duration; bnIdx = r.index; } });
+  rows.forEach((r) => { if (eff(r) > maxDur) { maxDur = eff(r); bnIdx = r.index; } });
   const bn = rows.find((r) => r.index === bnIdx);
   const blocks = [];
-  blocks.push(`Bottleneck: <span class="bn-tag">Etap ${bnIdx} \u2014 ${esc(bn ? bn.name : "")}</span> (czas montazu ${f(maxDur)}) \u2014 tutaj najpierw ustawia sie kolejka.`);
+  const bnParallel = bn && bn.servers > 1 ? ` (\u00d7${bn.servers} rownolegle, czas/${bn.servers})` : '';
+  blocks.push(`Bottleneck: <span class="bn-tag">Etap ${bnIdx} \u2014 ${esc(bn ? bn.name : "")}</span> (efektywny czas ${f(maxDur)}${bnParallel}) \u2014 tutaj najpierw ustawia sie kolejka.`);
   rows.forEach((r) => {
     if (r.egressBlock > 0.05) blocks.push(`Miedzy Etapem ${r.index} a ${r.index + 1}: czesc zablokowana <b>${f(r.egressBlock)}</b> (czeka, az zwolni sie dalej).`);
   });
@@ -186,7 +206,9 @@ const renderTimesReportHtml = ({ rows, cycleTime, launchInterval, totalTime, thr
   const stageRowsHtml = rows.map((r) => {
     const saved = Math.max(0, r.baseDuration - r.duration);
     const savedLabel = saved > 0.05 ? `${f(saved)} (${r.baseDuration > 0 ? Math.round(saved / r.baseDuration * 100) : 0}%)` : '\u2014';
-    return `<tr${r.index === bnIdx ? ' class="bn"' : ''}><td>${r.index}</td><td>${esc(r.name)}</td><td>${r.workerCount ?? '\u2014'}</td><td>${f(r.baseDuration)}</td><td>${f(r.duration)}</td><td>${savedLabel}</td><td>${r.travelOut != null ? f(r.travelOut) : '\u2014'}</td><td>${r.egressBlock > 0.05 ? f(r.egressBlock) : '\u2014'}</td><td>${maxDur > 0 ? Math.round(Math.min(100, r.duration / maxDur * 100)) : 0}%</td></tr>`;
+    const serversLabel = r.servers > 1 ? `\u00d7${r.servers}` : '1';
+    const util = maxDur > 0 ? Math.round(Math.min(100, eff(r) / maxDur * 100)) : 0;
+    return `<tr${r.index === bnIdx ? ' class="bn"' : ''}><td>${r.index}</td><td>${esc(r.name)}${r.isOffline ? ' <span class="off-tag">poza linia</span>' : ''}</td><td>${serversLabel}</td><td>${r.workerCount ?? '\u2014'}</td><td>${f(r.baseDuration)}</td><td>${f(r.duration)}</td><td>${savedLabel}</td><td>${r.travelOut != null ? f(r.travelOut) : '\u2014'}</td><td>${r.egressBlock > 0.05 ? f(r.egressBlock) : '\u2014'}</td><td>${util}%</td></tr>`;
   }).join('');
   const blocksHtml = blocks.length ? `<ul>${blocks.map((b) => `<li>${b}</li>`).join('')}</ul>` : `<p class="ok">Brak istotnych blokad \u2014 przy obecnych czasach linia jest zbalansowana.</p>`;
   return `<!DOCTYPE html><html lang="pl"><head><meta charset="utf-8"><title>Raport czasow linii \u2014 paczkomat</title>
@@ -201,6 +223,7 @@ const renderTimesReportHtml = ({ rows, cycleTime, launchInterval, totalTime, thr
   th{background:#f1f5f9;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:#475569;}
   tr.bn td{background:#fff7ed;font-weight:600;}
   .bn-tag{display:inline-block;background:#fde68a;color:#92400e;border-radius:4px;padding:2px 8px;font-weight:600;}
+  .off-tag{display:inline-block;background:#fce7f3;color:#9d174d;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:600;margin-left:4px;}
   ul{margin:8px 0;padding-left:18px;} li{margin:4px 0;font-size:13px;} .ok{color:#15803d;font-weight:600;}
   @media print{body{margin:14px;} .noprint{display:none;}}
 </style></head><body>
@@ -214,7 +237,8 @@ const renderTimesReportHtml = ({ rows, cycleTime, launchInterval, totalTime, thr
     <div class="card"><div class="l">Na zmiane (8h)</div><div class="v">${Math.round(throughputPerShift)} szt</div></div>
   </div>
   <h2>Etapy i czasy</h2>
-  <table><thead><tr><th>#</th><th>Etap</th><th>Prac.</th><th>Czas bazowy</th><th>Czas po obsadzie</th><th>Oszczednosc</th><th>Przejazd do nastepnego</th><th>Blokada za etapem</th><th>Wykorzystanie</th></tr></thead><tbody>${stageRowsHtml}</tbody></table>
+  <table><thead><tr><th>#</th><th>Etap</th><th>Stan.</th><th>Prac.</th><th>Czas bazowy</th><th>Czas po obsadzie</th><th>Oszczednosc</th><th>Przejazd do nastepnego</th><th>Blokada za etapem</th><th>Wykorzystanie</th></tr></thead><tbody>${stageRowsHtml}</tbody></table>
+  <p class="sub" style="margin-top:4px">Kolumna „Stan." = liczba rownoleglych stanowisk (etap wykonczeniowy poza linia ma ×N — N palet/stanowisk pracuje jednoczesnie, wiec jego efektywny czas i obciazenie sa N-krotnie mniejsze).</p>
   <p class="sub" style="margin-top:4px">Wykorzystanie pokazuje, jak bardzo stanowisko jest obciążone względem najbardziej obciążonego (100%). Stanowisko ze 100% narzuca tempo linii; mniej = ma zapas i czeka. Najlepiej, gdy wszędzie jest blisko 100% — praca równo rozłożona.</p>
   <h2>Blokady / oczekiwania</h2>
   ${blocksHtml}
@@ -233,11 +257,7 @@ const CONVEYOR_ELEVATION = 1.3;
 const MODEL_LINE_Y = CONVEYOR_ELEVATION + 1.04;
 const STATION_SIDE_DISTANCE = CONVEYOR_WIDTH / 2 + 1.25;
 const ROLLER_COLOR = '#e2e8f0';
-const CONVEYOR_UNITS_PER_SECOND = 1.42;
-const MIN_TRAVEL_SECONDS = 3.2;
-const ENTRY_TRAVEL_SECONDS = 2;
 const ENTRY_CONVEYOR_LENGTH = 5.8;
-const COMPLETED_DISPLAY_SECONDS = 5;
 // Pracownicy pozostaja w scenie i w kodzie, ale sa tymczasowo niewidoczni.
 // Zmien na true, aby ponownie ich pokazac.
 const SHOW_WORKERS = true;
@@ -252,228 +272,8 @@ const LOCK_COUNT = LOCKS_PER_MODULE * MODULE_COUNT;
 const LOCKER_COUNT = LOCK_COUNT;
 const SHELF_COUNT = LOCKS_PER_MODULE;
 
-// =====================================================================
-// === STROJENIE NA ZYWO (Vite HMR) ===================================
-// Zmien ktorakolwiek z tych liczb i ZAPISZ - Vite przeladuje scene od
-// reki, bez nagrywania. Tu sa wszystkie pozycje, ktore dotad strzelalem
-// na slepo. Ustaw je u siebie patrzac na render.
-// ---------------------------------------------------------------------
-const TUNE = {
-  // DROBNA korekta X zamkow [modul 0, modul 1]. Zamki sa AUTOMATYCZNIE stawiane
-  // na zmierzonej pozycji WIEKSZEGO koryta kazdej polowy - ta wartosc to tylko
-  // ewentualny nudge (np. zeby zamki wystawaly z powierzchni). 0 = na korycie.
-  lockX: [0, 0],
-  // Wysokosc dachu liczona od szczytu kolumny. Zwieksz = wyzej (gdy wnika),
-  // zmniejsz = nizej (gdy lewituje).
-  roofYOffset: -0.08,
-  // Wysokosc daszka - ma byc lekko POD dachem (czyli mniej niz roofYOffset).
-  canopyYOffset: -0.16,
-  // PELNY obrot dachu/daszka [rotX, rotY, rotZ] w radianach. Model ma juz
-  // gotowy skos - rotY = Math.PI obraca go na wlasciwa strone (okap na przod).
-  // Gdyby skos byl po zlej stronie, daj rotY: 0. Obrot robiony w miejscu.
-  roofRot: [Math.PI / 2, Math.PI, 0],
-  canopyRot: [Math.PI / 2, Math.PI, 0],
-  // PRZESUNIECIE dachu/daszka [x, y, z]. Obrot tylko obraca w miejscu - TYM
-  // przesuwasz je nad drzwi (zielona strefa na zdjeciu). z = przod/tyl (nad
-  // skrytki), x = lewo/prawo, y = gora/dol (dodatkowo do roof/canopyYOffset).
-  roofOffset: [0, 0, 0.16],
-  // Daszek domyslnie wysuniety na PRZEDNIA krawedz (z=0.7), zeby nie chowal sie
-  // pod dachem. Gdyby trafil na tyl - zmien z na ujemne (np. -0.7).
-  canopyOffset: [0, 0.1, 0.9],
-  // Docelowa wysokosc (Y) sciany tylniej. Ujemne = nizej (na DOLE / z TYLU).
-  // Sciana jest automatycznie sprowadzana w dol na ta wysokosc i wjezdza od dolu.
-  backWallY: -0.85,
-  // O ile gleboko pod spodem startuje sciana tylnia (montaz "od dolu").
-  backWallDrop: 1.0,
-  // Obrot sciany tylniej (radiany) - byla "do gory nogami", wiec domyslnie PI
-  // (180 stopni). Gdyby trzeba bylo innej osi, daj znac.
-  backWallRotX: Math.PI,
-  // === Sekwencja: jedna czesc przed druga (#4 - OSOBNE OBIEKTY) ===
-  // Druga polowa to TEN SAM paczkomat OPOZNIONY o tyle SEKUND - jedzie ta sama
-  // trasa wlasna sciezka, wiec stoi na prawdziwej, wczesniejszej stacji (a nie
-  // sztucznie przesunieta). Lider czeka na podstawie az dojedzie i sie zlacza.
-  // Wieksze = druga polowa dalej z tylu. MUSI byc < ~7s (postoj lidera na
-  // koncu), inaczej lider zniknie przed dolaczeniem.
-  halfDelaySeconds: 4,
-  partLagStages: 1,
-  // O ile druga polowa jest cofnieta NA TASMIE (zeby jechala ZA pierwsza, a nie
-  // obok). ~-17 = jedna pelna stacja w tyle; im bardziej ujemne, tym dalej za
-  // pierwsza. Zanika przy laczeniu na podstawie. Jesli druga polowa wyjdzie z
-  // PRZODU zamiast z tylu - ZMIEN ZNAK (np. 18). 0 = bez przesuniecia.
-  partTrailSpacing: -18,
-  // Gdy pierwsza polowa wchodzi w final, druga PODJEZDZA do bufora MIEDZY
-  // etapem 3 a 4 i tam czeka (zamiast blokowac stacje etapu 3). To wartosc tego
-  // bufora - mniej ujemna niz partTrailSpacing (np. polowa: -9).
-  partTrailBuffer: -9,
-  // Rozstaw stacji = DLUGOSC ROLOTOKU i odstepy miedzy czesciami. Domyslnie
-  // bylo 7.6; zwieksz, gdy czesci na siebie nachodza (np. 12, 14, 16).
-  stationSpacing: 20,
-  // Dodatkowy bezpieczny luz ponad dlugosc polowy paczkomatu. Harmonogram
-  // przelicza go na czas potrzebny do fizycznego zwolnienia stacji.
-  partSafetyGap: 0.6,
-  // Odstep miedzy KOLEJNYMI paczkomatami (w cyklach stacji). Po naprawie zajetosci
-  // stacji (ogon) zwykle 0 wystarcza. Zwieksz, gdy paczkomaty nadal za blisko.
-  launchGapStages: 0,
-  // === Ostatni etap (stawianie pionowe) ===
-  // Odstep X miedzy dwiema polowkami. DODATNIE = rozsuwa, UJEMNE = scala je
-  // razem. Daj ujemne, gdy w srodku jest szpara / sciany sie rozjezdzaja.
-  halfGapX: 0,
-  // Pionowe dociagniecie stojacych kolumn (ujemne = nizej, gdy lewituja).
-  columnSettleY: 0,
-  // === KOREKTA POZYCJI FINALNEJ (czesci na podstawie) — strojenie milimetrowe ===
-  // Dziala dopiero gdy polowy stoja na podstawie. Male wartosci, np. -0.02.
-  finalNudgeX: 0,  // bok (X): + na zewnatrz, - do srodka
-  finalNudgeZ: -0.08,  // wzdluz podstawy (Z): + do przodu, - do tylu
-  finalNudgeY: 0,  // gora/dol (Y)
-  // Przeswit drugiej polowy podczas dojazdu nad podstawe. Najpierw konczy ona
-  // ruch w bok, a dopiero potem lagodnie opada na docelowa wysokosc. Zapobiega
-  // to przenikaniu kolumny przez geometrie podstawy w trakcie laczenia.
-  secondHalfApproachLift: 0.32,
-  // Wysokosc CALEGO stojacego paczkomatu (podstawa + kolumny) wzgledem linii.
-  // Ujemne opuszcza go, zeby PODSTAWA siadla na tasmociagu, a nie lewitowala.
-  standingY: -0.4,
-  // Wysokosc paczkomatu podczas montazu poziomego (etapy lezace). Lekko podniesione,
-  // zeby plecy nie wpadaly w rolki. Wczesniej na stale 0.34.
-  horizontalLift: 0.5,
-  // Wysokosc koryt lezacych PRZED obrotem do pionu: wejscie, etap 0 i dojazd
-  // do etapu 1. Ma byc na rolkach bez lewitacji, ale bez wpadania w rolotok.
-  preTurnHorizontalLift: 0.36,
-  // Obrot CALEJ czesci wokol dlugiej osi (radiany). Math.PI = czesc staje
-  // prawidlowo (nie do gory nogami). Daj 0, gdyby przegielo w druga strone.
-  partsRotY: Math.PI,
-  // === POLKI (GLB polka.glb) ===
-  shelfScale: 1,            // skala polki (gdy za duza/mala)
-  shelfRotX: 0,   // obrot polki, by lezala plasko w poprzek kolumny
-  shelfOffset: [0, 0, 0],   // drobne przesuniecie polki [x, y, z]
-  // === DRZWI (GLB - 4 rozmiary) ===
-  doorType: 'l',            // ktory rozmiar: 'xl' | 'l' | 's' | 'xs'
-  doorScale: 0.95,             // skala drzwi
-  doorRotX: Math.PI,         // 180° = do góry nogami              // obrot drzwi wokol X (gdy zle ustawione)
-  doorRotY: 0,              // obrot drzwi wokol Y
-  doorOffset: [0, 0.27, 0.2],    // drobne przesuniecie drzwi [x, y, z]
-  // Szary odstep miedzy skrytkami (grubosc paska), zeby drzwi nie zlewaly sie
-  // w jeden bialy prostokat. 0 = brak. Zwieksz, jesli ma byc wyrazniejszy.
-  cellGap: 0.03,
-  // Szerokosc separatora (X). Zmniejsz, gdy wystaje poza sciane boczna.
-  cellGapWidth: 0.98,
-  // Przesuniecie szarego separatora skrytek [x, y, z] - gdy wypada za wysoko/
-  // za nisko albo nie na granicy drzwiczek.
-  cellGapOffset: [0, -0.054, 0],
-  // === SIATKA SKRYTEK (drzwi + polki) ===
-  // Poczatek (Z) pierwszego rzedu skrytek i odstep miedzy rzedami. Zwieksz
-  // odstep / przesun start, gdy skrytki nie wypelniaja kolumny (szpara u gory).
-  cellRowStart: -2,
-  cellRowSpacing: 0.4,
-  // === KAMERA (OrbitControls) — katy i zakres zoomu ===
-  camera: {
-    minDistance: 5,                 // jak blisko mozna dojechac (zoom in)
-    maxDistance: 110,               // jak daleko mozna oddalic (zoom out)
-    minPolarAngle: 0.08,            // najwyzsze ujecie (0 = pion z gory)
-    maxPolarAngle: Math.PI * 0.49,  // najnizsze ujecie (~plasko z boku); wieksze = nizej
-    moveSpeed: 14,                  // predkosc przesuwania klawiszami WASD (jednostki/s)
-  },
-  // === OBROT KORYT DO PIONU (etap 2) — strojenie wygladu ===
-  // portion: jaka czesc etapu trwa obrot (mniej = szybciej).
-  // arcLift: chwilowe uniesienie w trakcie obrotu, by koryta nie szly przez rolki (np. 0.3).
-  // pose0/pose1: pozycja KAZDEGO z dwoch koryt podczas lezenia. Zmniejsz offsetX,
-  //   jesli jada za bardzo w bok / "zamieniaja sie"; rotationZ pose1 = 180 (obrot).
-  troughTurn: {
-    portion: 0.2,
-    arcLift: 0.3,  // <- moja proba: unosi koryta w trakcie obrotu, by nie wpadaly w rolki
-    posOffset0: [0, 0, 0], // przesuniecie koryta modulu 0 [x=bok, y=gora/dol, z=wzdluz]
-    posOffset1: [0, 0, 0], // przesuniecie koryta modulu 1 [x, y, z]
-    pose0: { rotationX: 0, rotationY: 0, rotationZ: 0, offsetX: 1.04, offsetY: 0.7, offsetZ: 0 },
-    pose1: { rotationX: 0, rotationY: 0, rotationZ: 180, offsetX: 1.04, offsetY: -1.64, offsetZ: 0 },
-    // Niezalezna, UTRWALONA korekta OSOBNO dla duzego i malego koryta (rot w stopniach, pos w metrach).
-    // Dziala zawsze, tez w pionie — pozwala obracac/przesuwac kazdy typ koryta osobno.
-    large: { rot: [0, 0, 0], pos: [0, 0, 0] }, // duze (srodkowe) koryto
-    small: { rot: [0, 0, 0], pos: [0, 0, 0] }, // male koryto
-  },
-  // === SCIANY BOCZNE ===
-  // Obrot POJEDYNCZEJ sciany [rotX, rotY, rotZ] w radianach. Klucz "modul-faza"
-  // ('0-first' = lewa sciana modulu 0, '0-second' = prawa, itd.). Domyslnie
-  // wszystkie 0. Ustaw tej zle obroconej np. rotZ: Math.PI (profil) albo
-  // rotX: Math.PI. Obrot jest robiony W MIEJSCU (z korekta pozycji).
-  wallRot: {
-    '0-first': [Math.PI, 0, Math.PI],
-    '0-second': [0, 0, 0],
-    '1-first': [0, 0, 0],
-    '1-second': [0, 0, 0],
-  },
-  // Dosuniecie POJEDYNCZEJ sciany [x, y, z], gdy po obroceniu nie przylega.
-  // Klucz "modul-faza" (jak wallRot). x = lewo/prawo, z = wzdluz, y = gora/dol.
-  wallOffset: {
-    '0-first': [0.08, 0, 0],
-    '0-second': [0, 0, 0],
-    '1-first': [0, 0, 0],
-    '1-second': [0, 0, 0],
-  },
-  // === BUFOR NA ROLOTOKU (wizualny odcinek przelotowy) ===
-  // Wydluza tasme miedzy etapami, tworzac pusty odcinek bufora obok Strefy
-  // napraw, przez ktory elementy po prostu przejezdzaja. NIE zmienia logiki
-  // skladania - przesuwa tylko geometrie stacji (i stref) za buforem.
-  bufferSegment: {
-    enabled: true,
-    afterStage: 1,    // bufor po tym etapie (1 = Montaz pionow), przed nastepnym
-    extraLength: 9,   // dodatkowa dlugosc rolotoku (swiat) = dlugosc bufora
-    planPx: 99999,    // wylaczone: px->swiat liniowo wszedzie (edytor jest WYSIWYG)
-    colorInset: 2.5,  // o ile (swiat) skrocic kolorowanie rolek z KAZDEJ strony, zeby
-                      // zaczynalo sie za krawedzia obszaru montazowego, nie na srodku.
-  },
-  // === ZAGESZCZENIE WCZESNYCH ETAPOW ===
-  // Skraca odstep miedzy poczatkowymi etapami. 'untilStage' zostaje na miejscu,
-  // a wczesniejsze etapy dosuwaja sie do niego odstepem 'spacing'. Reszta linii
-  // (bufor, pozniejsze stacje, strefy) bez zmian.
-  tightEarly: {
-    untilStage: 1,  // etapy <= tego sa zageszczone (1 = etapy 0,1 blizej siebie)
-    spacing: 11,    // odstep miedzy wczesnymi etapami (pelny stationSpacing = 20)
-  },
-  // Precyzyjne przesuniecie POJEDYNCZEJ stacji wzdluz linii (swiat, +z = w strone
-  // finalnego). Indeks = etap. Nie zmienia czasow ani bufora, tylko pozycje stacji
-  // (strefa montazowa + pracownicy). Tu: Montaz drzwi (E2) odsuniety od strefy Drzwi.
-  stationNudge: [0, 0, 6, 0],
-  // === STREFY HALI (sektory wg planu od przelozonego) ===
-  // Koloruje i opisuje obszary robocze wokol linii. Pozniej w wybrane strefy
-  // wstawimy modele pracownikow - kazda strefa ma gotowy pusty 'sectorSlot'.
-  sectors: {
-    show: true,        // wlacz / wylacz wszystkie strefy
-    opacity: 0.22,     // przezroczystosc kolorowego wypelnienia (0-1)
-    width: 3.6,        // szerokosc strefy w poprzek linii (X)
-    depth: 3.0,        // glebokosc strefy wzdluz linii (Z)
-    outward: 1.1,      // dodatkowe odsuniecie strefy na zewnatrz od operatora
-    // --- pracownicy przy stanowiskach linii glownej (liczba sterowana w panelu UI) ---
-    workersPerStationDefault: 1,        // domyslna liczba dla nowych stacji
-    workerSpacing: 1.15,                // odstep miedzy pracownikami na tej samej stronie
-    labelHeight: 1.55, // wysokosc unoszacej etykiety nad podloga
-    // --- powierzchnia hali ---
-    floorWidth: 46,    // szerokosc podlogi hali w poprzek linii (X)
-    floorDepthPad: 58, // zapas dlugosci podlogi wzdluz linii (Z)
-    floorCenterX: -6,  // przesuniecie srodka podlogi (plan ma wiecej stref na dole)
-    // --- mapowanie PLANU hali na swiat (strefy peryferyjne) ---
-    // Kazdy sektor ma w danych pozycje z planu (px,py). Te liczby przeliczaja
-    // piksele planu na metry sceny. planCX/planCY = srodek planu (os = linia).
-    planCX: 515,
-    planCY: 180,
-    planZScale: 0.07,   // wzdluz linii: wieksze = strefy bardziej rozsuniete
-    planXScale: 0.07,   // w poprzek = wzdluz (jednolita skala -> ksztalty jak w planie)
-    planGap: 1.5,       // staly odstep stref od linii montazowej (cofa je od stanowisk)
-    // --- bufor podstaw (siatka miejsc na palety) ---
-    bufferPx: 1400,     // pozycja bufora w planie (px) - za koniec rolotoku, poza Blendy/Dachy
-    bufferPy: 85,       // pozycja bufora w planie (py)
-    bufferCols: 4,      // liczba miejsc wzdluz
-    bufferRows: 2,      // liczba miejsc w poprzek
-    bufferCell: 3.8,    // rozmiar jednego miejsca na palete
-  },
-};
-// =====================================================================
-const ASSEMBLY_LENGTH = 4.8;
 const ASSEMBLY_HALF_LENGTH = ASSEMBLY_LENGTH / 2;
 const ASSEMBLY_ITEM_SPACING = 0.4;
-// Wspolna skala calego paczkomatu. Jest nakladana na nadrzedna grupe, wiec
-// wszystkie czesci oraz ich lokalne przesuniecia animacji rosna proporcjonalnie.
-// 1.06 daje ok. 20% wiekszy model niz poprzednie 0.88 i nadal zostawia zapas
-// na rolotoku o szerokosci CONVEYOR_WIDTH.
-const MODEL_RENDER_SCALE = 1.06;
 // Druga polowa jest osobnym modelem jadacym ta sama osia co pierwsza. Na
 // ostatniej stacji musi najpierw zejsc z tej osi na swoja strone, inaczej
 // podczas stawiania przechodzi przez pierwsza kolumne i podstawe.
@@ -525,32 +325,6 @@ const DOOR_S_MODEL_URL = '/models/components/door-s.glb';
 const DOOR_XS_MODEL_URL = '/models/components/door-xs.glb';
 const CONVEYOR_SURFACE_Y = CONVEYOR_ELEVATION + 0.55;
 
-const buildLinePoints = (count) => {
-  // Rozstaw stacji = dlugosc rolotoku. Wiekszy = dluzsza tasma i wieksze
-  // odstepy miedzy czesciami (zeby nie nachodzily). Strojone przez TUNE.
-  const n = Math.max(count, 1);
-  const spacing = TUNE.stationSpacing ?? 7.6;
-  const startZ = -((n - 1) * spacing) / 2;
-  // Bufor: dodatkowa dlugosc rolotoku po etapie 'afterStage'. Czas/logika
-  // sa niezmienione - to tylko geometria.
-  const buf = TUNE.bufferSegment ?? {};
-  const bufExtra = (buf.enabled ?? false) ? (buf.extraLength ?? 0) : 0;
-  const bufAfter = buf.afterStage ?? -1;
-  // Pozycja "bazowa" (rownomierna) etapu i.
-  const base = (i) => startZ + i * spacing + (i > bufAfter ? bufExtra : 0);
-  // Zageszczenie wczesnych etapow: 'untilStage' (anchor) zostaje na miejscu,
-  // a wczesniejsze etapy dosuwaja sie do niego mniejszym odstepem 'spacing'.
-  const tight = TUNE.tightEarly ?? {};
-  const anchor = Math.min(tight.untilStage ?? -1, n - 1);
-  const tightSpacing = tight.spacing ?? spacing;
-
-  const nudge = TUNE.stationNudge ?? [];
-  return Array.from({ length: n }, (_, i) => {
-    const z = (i >= anchor ? base(i) : base(anchor) - (anchor - i) * tightSpacing) + (nudge[i] ?? 0);
-    return new THREE.Vector3(0, 0.55, z);
-  });
-};
-
 const easeOut = (value) => 1 - Math.pow(1 - value, 3);
 
 const getRouteTangent = (points, index) => {
@@ -576,316 +350,6 @@ const getStationSideOffset = (points, index, center) => {
   }
 
   return side.multiplyScalar(STATION_SIDE_DISTANCE);
-};
-
-const getTravelDurations = (stageCount) => {
-  const points = buildLinePoints(stageCount);
-
-  return points.slice(0, -1).map((point, index) => {
-    const distance = point.distanceTo(points[index + 1]);
-    return Math.max(MIN_TRAVEL_SECONDS, distance / CONVEYOR_UNITS_PER_SECOND);
-  });
-};
-
-// Domyslny czas dojazdu miedzy etapami = 2 s (mozna zmienic w UI / Tasmociag).
-const DEFAULT_TRAVEL_SECONDS = 2;
-// Domyslne czasy przejazdu kolejnych przejazdow: E0->E1, E1->E2, E2->E3 (bufor), E3->E4.
-const DEFAULT_TRAVEL_TIMES = [3, 7, 3];
-const getDefaultTravelTimes = (stageCount) =>
-  getTravelDurations(stageCount).map((_, index) => DEFAULT_TRAVEL_TIMES[index] ?? DEFAULT_TRAVEL_SECONDS);
-
-const normalizeTravelTimes = (travelTimes, stageCount) => {
-  const defaults = getDefaultTravelTimes(stageCount);
-
-  return defaults.map((defaultTime, index) => Math.max(0.1, clampNumber(travelTimes[index], defaultTime)));
-};
-
-const buildProductionSchedule = (
-  stages,
-  count,
-  travelTimes = [],
-  measuredPartLength = ASSEMBLY_LENGTH * MODEL_RENDER_SCALE,
-) => {
-  const stageCount = stages.length;
-  const unitCount = Math.max(1, count);
-  const travelDurations = normalizeTravelTimes(travelTimes, stageCount);
-  if (stageCount === 0) {
-    return {
-      units: [],
-      leadUnits: [],
-      trailUnits: [],
-      totalTime: 0.1,
-      launchInterval: 0.1,
-      soloCycleTime: 0.1,
-      travelDurations,
-      pairHeadway: 0,
-      finalStageIndex: -1,
-      partMinimumGap: 0,
-    };
-  }
-
-  // Kazda polowa jest osobnym nosnikiem produkcyjnym. Stacje i odcinki miedzy
-  // nimi sa wspolnymi zasobami, wiec w danej chwili moze z nich korzystac tylko
-  // jedna polowa. Ostatnia stacja jest wyjatkiem: wpuszcza sparowany ogon po
-  // zakonczeniu podnoszenia lidera, aby obie czesci mogly sie kontrolowanie zlaczyc.
-  const stationFreeAt = Array(stageCount).fill(0);
-  const segmentFreeAt = Array(Math.max(stageCount - 1, 0)).fill(0);
-  let entryFreeAt = 0;
-  let finalStationFreeAt = 0;
-  const leadUnits = [];
-  const trailUnits = [];
-
-  const stageCycle = Math.max(stages[0]?.duration ?? 0.1, 0.1)
-    + (travelDurations[0] ?? MIN_TRAVEL_SECONDS);
-  const lagFromStages = Math.max(TUNE.partLagStages ?? 0, 0) * stageCycle;
-  const lagFromDistance = (
-    Math.abs(TUNE.partTrailSpacing ?? 0)
-    / Math.max(TUNE.stationSpacing ?? 7.6, 0.1)
-  ) * stageCycle;
-  const pairHeadway = Math.max(
-    TUNE.halfDelaySeconds ?? 0,
-    lagFromStages,
-    lagFromDistance,
-    0.1,
-  );
-  const productHeadway = Math.max(
-    pairHeadway,
-    Math.max(TUNE.launchGapStages ?? 0, 0) * stageCycle,
-  );
-  const finalStageIndex = stageCount - 1;
-  // Wszystkie modele GLB sa normalizowane do ASSEMBLY_LENGTH, a nastepnie
-  // renderowane w skali MODEL_RENDER_SCALE. To daje rzeczywista dlugosc
-  // nosnika na linii; dodajemy do niej regulowany margines bezpieczenstwa.
-  const partMinimumGap = Math.max(measuredPartLength, 0.1)
-    + Math.max(TUNE.partSafetyGap ?? 0, 0);
-  const stationSpacing = Math.max(TUNE.stationSpacing ?? 7.6, partMinimumGap + 0.01);
-  const getClearanceDuration = (travelDuration) => {
-    const distanceRatio = Math.min(Math.max(partMinimumGap / stationSpacing, 0), 0.98);
-    // Odwrotnosc easing: 0.5 - cos(progress * PI) / 2.
-    const progress = Math.acos(1 - 2 * distanceRatio) / Math.PI;
-    return travelDuration * progress;
-  };
-  const finalBufferDelay = (
-    Math.abs(TUNE.partTrailBuffer ?? 0) / stationSpacing
-  ) * (travelDurations[Math.max(finalStageIndex - 1, 0)] ?? MIN_TRAVEL_SECONDS);
-
-  const scheduleHalf = ({ number, role, desiredStart, finalEarliest }) => {
-    const segments = [];
-    // Nie wpuszczamy kolejnej polowy na odcinek wejsciowy, jezeli nie bedzie
-    // mogla zwolnic go przy stacji 0. Eliminuje to kolejke wewnatrz modeli.
-    const entryStart = Math.max(
-      desiredStart,
-      entryFreeAt,
-      (stationFreeAt[0] ?? 0) - ENTRY_TRAVEL_SECONDS,
-      0,
-    );
-    let arrivalAtStage = entryStart + ENTRY_TRAVEL_SECONDS;
-    entryFreeAt = arrivalAtStage;
-
-    segments.push({
-      type: 'entry',
-      resource: 'entry',
-      start: entryStart,
-      end: arrivalAtStage,
-      duration: ENTRY_TRAVEL_SECONDS,
-    });
-
-    let finishTime = arrivalAtStage;
-    for (let stageIndex = 0; stageIndex < stageCount; stageIndex += 1) {
-      const duration = Math.max(stages[stageIndex]?.duration ?? 0, 0.1);
-      const isFinalStage = stageIndex === finalStageIndex;
-      const stationAvailableAt = isFinalStage
-        ? finalEarliest
-        : stationFreeAt[stageIndex] ?? 0;
-      const assemblyStart = Math.max(arrivalAtStage, stationAvailableAt);
-      const assemblyEnd = assemblyStart + duration;
-      const hasNextStage = stageIndex < finalStageIndex;
-
-      if (!hasNextStage) {
-        segments.push({
-          type: 'stage',
-          resource: `station:${stageIndex}`,
-          stageIndex,
-          start: assemblyStart,
-          assemblyEnd,
-          end: assemblyEnd,
-          duration,
-        });
-        finishTime = assemblyEnd;
-        break;
-      }
-
-      const travelDuration = travelDurations[stageIndex] ?? MIN_TRAVEL_SECONDS;
-      const approachesFinalStage = stageIndex + 1 === finalStageIndex;
-      const destinationDepartureGate = approachesFinalStage
-        // Dojazd do finalu zaczyna sie dopiero po zwolnieniu stanowiska przez
-        // poprzedni produkt albo po zakonczeniu podnoszenia sparowanego lidera.
-        ? finalEarliest
-        // Na zwyklej stacji rowniez nie wjezdzamy w strefe dojazdowa, dopoki
-        // poprzednia polowa nie odsunie sie o pelna bezpieczna odleglosc.
-        : stationFreeAt[stageIndex + 1] ?? 0;
-      const travelStart = Math.max(
-        assemblyEnd,
-        segmentFreeAt[stageIndex] ?? 0,
-        destinationDepartureGate,
-      );
-      const travelEnd = travelStart + travelDuration;
-
-      segments.push({
-        type: 'stage',
-        resource: `station:${stageIndex}`,
-        stageIndex,
-        start: assemblyStart,
-        assemblyEnd,
-        end: travelStart,
-        duration,
-      });
-      segments.push({
-        type: 'travel',
-        resource: `segment:${stageIndex}`,
-        from: stageIndex,
-        to: stageIndex + 1,
-        start: travelStart,
-        end: travelEnd,
-        duration: travelDuration,
-      });
-
-      // Stacja jest wolna dopiero, gdy srodek wyjezdzajacej polowy oddali sie o
-      // jej pelna dlugosc + margines. Zapobiega zetknieciu na granicy stacji.
-      stationFreeAt[stageIndex] = travelStart + getClearanceDuration(travelDuration);
-      segmentFreeAt[stageIndex] = travelEnd;
-      arrivalAtStage = travelEnd;
-      finishTime = travelEnd;
-    }
-
-    return {
-      number,
-      role,
-      key: `${number}`,
-      startTime: segments[0]?.start ?? desiredStart,
-      finishTime,
-      segments,
-    };
-  };
-
-  let desiredLeadStart = 0;
-  for (let unitIndex = 0; unitIndex < unitCount; unitIndex += 1) {
-    const number = unitIndex + 1;
-    const lead = scheduleHalf({
-      number,
-      role: 'lead',
-      desiredStart: desiredLeadStart,
-      finalEarliest: finalStationFreeAt,
-    });
-    const leadFinal = lead.segments.find(
-      (segment) => segment.type === 'stage' && segment.stageIndex === finalStageIndex,
-    );
-    const trail = scheduleHalf({
-      number,
-      role: 'trail',
-      desiredStart: lead.startTime + pairHeadway,
-      // Ogon moze wjechac na final dopiero, gdy lider zakonczyl podnoszenie.
-      // partTrailBuffer jest odlegloscia bufora przeliczana na czas dojazdu.
-      finalEarliest: Math.max(
-        finalStationFreeAt,
-        (leadFinal?.assemblyEnd ?? 0) + finalBufferDelay,
-      ),
-    });
-    const trailFinal = trail.segments.find(
-      (segment) => segment.type === 'stage' && segment.stageIndex === finalStageIndex,
-    );
-    const pairFinish = Math.max(
-      leadFinal?.assemblyEnd ?? lead.finishTime,
-      trailFinal?.assemblyEnd ?? trail.finishTime,
-    ) + COMPLETED_DISPLAY_SECONDS;
-
-    // Lider czeka na podstawie na druga polowe. Obie czesci znikaja dopiero po
-    // wspolnym czasie prezentacji gotowego paczkomatu.
-    if (leadFinal) leadFinal.end = pairFinish;
-    if (trailFinal) trailFinal.end = pairFinish;
-    lead.finishTime = pairFinish;
-    trail.finishTime = pairFinish;
-    finalStationFreeAt = pairFinish;
-    stationFreeAt[finalStageIndex] = pairFinish;
-
-    leadUnits.push(lead);
-    trailUnits.push(trail);
-    desiredLeadStart = trail.startTime + productHeadway;
-  }
-
-  const firstStarts = leadUnits.map((unit) => unit.startTime);
-  // Takt USTALONY: najwiekszy odstep miedzy kolejnymi startami (stan po rozbiegu
-  // pustej linii). Srednia zanizalaby takt przy malej liczbie sztuk - dla pomiaru
-  // przepustowosci liczy sie odstep w stanie ustalonym, czyli wartosc graniczna.
-  let steadyTakt = Math.max(stages[0]?.duration ?? 0, 0.1);
-  for (let i = 1; i < firstStarts.length; i += 1) {
-    steadyTakt = Math.max(steadyTakt, firstStarts[i] - firstStarts[i - 1]);
-  }
-  const soloCycleTime =
-    stages.reduce((sum, stage) => sum + Math.max(stage.duration, 0.1), 0)
-    + travelDurations.reduce((sum, duration) => sum + duration, 0)
-    + ENTRY_TRAVEL_SECONDS
-    + COMPLETED_DISPLAY_SECONDS;
-
-  return {
-    // `units` pozostaje aliasem liderow dla istniejacych metryk/UI.
-    units: leadUnits,
-    leadUnits,
-    trailUnits,
-    totalTime: Math.max(leadUnits[leadUnits.length - 1]?.finishTime ?? soloCycleTime, 0.1),
-    launchInterval: Math.max(steadyTakt, 0.1),
-    soloCycleTime: Math.max(soloCycleTime, 0.1),
-    travelDurations,
-    pairHeadway,
-    finalStageIndex,
-    partMinimumGap,
-  };
-};
-
-const validateScheduleReservations = (schedule) => {
-  const reservations = [];
-  const carriers = [
-    ...(schedule.leadUnits ?? []),
-    ...(schedule.trailUnits ?? []),
-  ];
-
-  carriers.forEach((carrier) => {
-    carrier.segments.forEach((segment) => {
-      if (!segment.resource || segment.end <= segment.start) return;
-      reservations.push({
-        resource: segment.resource,
-        start: segment.start,
-        end: segment.end,
-        number: carrier.number,
-        role: carrier.role,
-      });
-    });
-  });
-
-  const conflicts = [];
-  for (let index = 0; index < reservations.length; index += 1) {
-    const current = reservations[index];
-    for (let otherIndex = index + 1; otherIndex < reservations.length; otherIndex += 1) {
-      const other = reservations[otherIndex];
-      if (current.resource !== other.resource) continue;
-      const overlap = Math.min(current.end, other.end) - Math.max(current.start, other.start);
-      if (overlap <= 0.0001) continue;
-
-      const isPairedFinalJoin = current.resource === `station:${schedule.finalStageIndex}`
-        && current.number === other.number
-        && current.role !== other.role;
-      if (isPairedFinalJoin) continue;
-
-      conflicts.push({
-        resource: current.resource,
-        first: `${current.number}:${current.role}`,
-        second: `${other.number}:${other.role}`,
-        overlap,
-      });
-    }
-  }
-
-  return conflicts;
 };
 
 const getVisibleUnitsFromSchedule = (schedule, elapsed, stageCount, lane = 'lead') => {
@@ -932,6 +396,29 @@ const getVisibleUnitsFromSchedule = (schedule, elapsed, stageCount, lane = 'lead
         travelFrom: segment.from,
         travelTo: segment.to,
         travelProgress: ((elapsed - segment.start) / Math.max(segment.duration, 0.1)) * 100,
+        isBlocked: false,
+      });
+      return;
+    }
+
+    // Etap offline (poza rolotokiem): dojazd palety, praca na stanowisku i
+    // prezentacja/odjazd. Renderujemy palete TYLKO z toru 'lead' (caly,
+    // sparowany paczkomat jedzie na jednej palecie — bez duplikatu z toru trail).
+    if (segment.type === 'palletTravel' || segment.type === 'offline' || segment.type === 'offlineDone') {
+      if (lane === 'trail') return;
+      const dur = Math.max(segment.duration, 0.1);
+      const prog = Math.min(Math.max(((elapsed - segment.start) / dur) * 100, 0), 100);
+      visible.push({
+        key: `${scheduledUnit.number}`,
+        number: scheduledUnit.number,
+        role: 'offline',
+        elapsed,
+        mode: segment.type,
+        serverIndex: segment.serverIndex ?? 0,
+        currentIndex: segment.stageIndex ?? (stageCount - 1),
+        progress: prog,
+        assemblyProgress: prog,
+        travelProgress: ((elapsed - segment.start) / dur) * 100,
         isBlocked: false,
       });
       return;
@@ -1214,13 +701,18 @@ function Stopwatch({ elapsed, running, onToggle, onReset }) {
 function TravelTimeEditor({ stages, travelTimes, updateTravelTime }) {
   if (stages.length < 2) return null;
 
+  // Pokazujemy tylko przejazdy ROLOTOKU (miedzy stacjami na tasmie). Dojazd
+  // palety na etap offline (poza linia) jest osobny — TUNE.offline.palletTravel.
+  const conveyorTravelCount = getConveyorFinalIndex(stages.length);
+  const offline = isOfflineEnabled(stages.length);
+
   return (
     <div className="travel-editor">
       <div className="mini-heading">
         <span>Tasmociag</span>
         <strong>Czas przejazdu miedzy etapami</strong>
       </div>
-      {stages.slice(0, -1).map((stage, index) => {
+      {stages.slice(0, conveyorTravelCount).map((stage, index) => {
         const nextStage = stages[index + 1];
 
         return (
@@ -1238,6 +730,12 @@ function TravelTimeEditor({ stages, travelTimes, updateTravelTime }) {
           </label>
         );
       })}
+      {offline && (
+        <div style={{ fontSize: 11, color: 'var(--muted, #94a3b8)', marginTop: 4, lineHeight: 1.4 }}>
+          Dojazd palety na stanowisko offline (etap {stages.length - 1}) ustawiasz w
+          {' '}<code>TUNE.offline.palletTravel</code> — nie blokuje rolotoku.
+        </div>
+      )}
     </div>
   );
 }
@@ -1405,7 +903,12 @@ function Metrics({
         </div>
         {(stageUtilization ?? []).map((u, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '5px 0', fontSize: 12 }}>
-            <span style={{ width: 96, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</span>
+            <span style={{ width: 96, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {u.name}
+              {u.servers > 1 && (
+                <span style={{ marginLeft: 4, color: '#db2777', fontWeight: 600 }}>×{u.servers}</span>
+              )}
+            </span>
             <div style={{ flex: 1, background: 'rgba(148,163,184,0.25)', borderRadius: 4, height: 8, overflow: 'hidden' }}>
               <div style={{ width: `${u.pct}%`, height: '100%', background: u.isBottleneck ? '#dc2626' : '#2563eb' }} />
             </div>
@@ -1579,7 +1082,8 @@ const MAINLINE_SECTORS = [
   { label: 'Podmontaż koryt', minutes: null },
   { label: 'Montaż pionów', minutes: 15 },
   { label: 'Montaż drzwi', minutes: 12 },
-  { label: 'Montaż finalny', minutes: 16 },
+  { label: 'Włożenie w podstawę', minutes: 16 },
+  { label: 'Wykończenie (poza linią)', minutes: 16 },
 ];
 
 // Buduje jedna strefe robocza: plaski kolorowy pad + obrys + unoszaca etykieta
@@ -3019,6 +2523,11 @@ function updateTwoPartLockerModel(
   stages,
   halfMode,
   troughLyingPoses = createDefaultTroughLyingPoses(),
+  // Czesci WYKONCZENIOWE (laczenie/nitowanie, plecy, dach, daszek) montuje sie
+  // dopiero POZA rolotokiem na stanowisku offline (etap 4). Na rolotoku (etap 3)
+  // jest tylko wlozenie obu polowek w podstawe na palecie. Faza 3 wlaczy ten
+  // tryb dla modelu na stanowisku; tu domyslnie WYLACZONY.
+  showFinishing = false,
 ) {
   const parts = group.userData.parts;
   const stageIndex = (icon) => stages.findIndex((candidate) => candidate.icon === icon);
@@ -3331,22 +2840,95 @@ function updateTwoPartLockerModel(
   }
 
   // === Pokazujemy tylko JEDNA polowe (osobne obiekty na tasmie) ===
-  // 'lead' = modul 0 + podstawa/dach/daszek/laczenie (czolo paczkomatu).
-  // 'trail' = tylko modul 1 (ogon - ten sam paczkomat opozniony w czasie).
-  const sharedFinal = [parts.base, parts.baseFront, parts.backPanel, parts.centerJoin];
+  // 'lead' = modul 0 + podstawa (czolo paczkomatu). 'trail' = tylko modul 1.
+  // PODSTAWA jest zawsze widoczna z liderem (etap 3 = wlozenie w podstawe).
+  // Czesci WYKONCZENIOWE (plecy, laczenie, dach, daszek) tylko gdy showFinishing
+  // (stanowisko offline, etap 4) — na rolotoku pozostaja ukryte.
+  const sharedBase = [parts.base, parts.baseFront];
+  const finishingParts = [parts.backPanel, parts.centerJoin];
   if (halfMode === 'trail') {
     parts.moduleRoots[0].visible = false;
     parts.moduleRoots[1].visible = true;
-    sharedFinal.forEach((p) => { if (p) p.visible = false; });
+    sharedBase.forEach((p) => { if (p) p.visible = false; });
+    finishingParts.forEach((p) => { if (p) p.visible = false; });
     parts.roofs.forEach((r) => { r.visible = false; });
     parts.roofFascias.forEach((f) => { f.visible = false; });
   } else {
     parts.moduleRoots[0].visible = true;
     parts.moduleRoots[1].visible = false;
-    sharedFinal.forEach((p) => { if (p) p.visible = true; });
-    parts.roofs.forEach((r) => { r.visible = true; });
-    parts.roofFascias.forEach((f) => { f.visible = true; });
+    sharedBase.forEach((p) => { if (p) p.visible = true; });
+    finishingParts.forEach((p) => { if (p) p.visible = showFinishing; });
+    parts.roofs.forEach((r) => { r.visible = showFinishing; });
+    parts.roofFascias.forEach((f) => { f.visible = showFinishing; });
   }
+}
+
+// =====================================================================
+// === ETAP 4: PALETY + STANOWISKA OFFLINE (poza rolotokiem) ==========
+// =====================================================================
+
+// Placeholder europalety z belek (BoxGeometry). Latwy do podmiany na GLB:
+// wystarczy zastapic geometrie wczytanym modelem (TUNE.offline.pallet steruje
+// rozmiarem/kolorem). Zwraca Group z paleta wysrodkowana w (0,0,0), gornym
+// licem na wysokosci `height` — paczkomat stawiamy na `height`.
+function createPalletPlaceholder(cfg = {}) {
+  const width = cfg.width ?? 2.6;
+  const depth = cfg.depth ?? 3.2;
+  const height = cfg.height ?? 0.32;
+  const color = cfg.color ?? '#9a6b3f';
+  const group = new THREE.Group();
+  group.name = 'palletPlaceholder';
+  const plankMat = new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0.02 });
+  const deckTh = height * 0.28; // grubosc pomostu/ramy (deski)
+  // Gorny pomost (lico, na nim stoi paczkomat), dolna rama i 3 wsporniki.
+  const topDeck = new THREE.Mesh(new THREE.BoxGeometry(width, deckTh, depth), plankMat);
+  topDeck.position.y = height - deckTh / 2;
+  topDeck.castShadow = true;
+  topDeck.receiveShadow = true;
+  group.add(topDeck);
+  const bottomDeck = new THREE.Mesh(new THREE.BoxGeometry(width, deckTh, depth), plankMat);
+  bottomDeck.position.y = deckTh / 2;
+  group.add(bottomDeck);
+  const blockH = Math.max(height - 2 * deckTh, 0.06);
+  for (const sx of [-1, 0, 1]) {
+    const block = new THREE.Mesh(
+      new THREE.BoxGeometry(width * 0.16, blockH, depth),
+      plankMat,
+    );
+    block.position.set(sx * (width / 2 - width * 0.09), height / 2, 0);
+    group.add(block);
+  }
+  group.userData.topY = height; // gorne lico palety (tu stoi podstawa paczkomatu)
+  return group;
+}
+
+// Pozycje stanowisk offline w swiecie (THREE.Vector3, y=0 = podloga). Brane z
+// TUNE.offline.stations (edytowalne w edytor_stref.html). Gdy brakuje wpisu,
+// stanowiska sa rozkladane za koncem rolotoku.
+function getOfflineStationVectors(routePoints) {
+  const count = Math.max(1, Math.round(TUNE.offline?.stationCount ?? 1));
+  const configured = TUNE.offline?.stations ?? [];
+  const end = routePoints?.length ? routePoints[routePoints.length - 1].clone() : new THREE.Vector3();
+  return Array.from({ length: count }, (_, i) => {
+    const s = configured[i];
+    if (s && Number.isFinite(s.x) && Number.isFinite(s.z)) {
+      return new THREE.Vector3(s.x, 0, s.z);
+    }
+    // Fallback: za koncem rolotoku, rozsuniete na boki.
+    const spread = (i - (count - 1) / 2) * 8;
+    return new THREE.Vector3(spread, 0, end.z + 14);
+  });
+}
+
+// Pozycja palety na KONCU rolotoku (na ziemi, ZA ostatnia stacja). Ostatnia
+// stacja jest pod podniesiona tasma, wiec paleta stoi dalej wzdluz linii o
+// TUNE.offline.endPalletGap — tam spuszczane sa gotowe paczkomaty na palete.
+function getEndPalletVector(routePoints) {
+  if (!routePoints?.length) return new THREE.Vector3();
+  const end = routePoints[routePoints.length - 1];
+  const forward = getRouteTangent(routePoints, routePoints.length - 1);
+  const gap = TUNE.offline?.endPalletGap ?? 0;
+  return new THREE.Vector3(end.x, 0, end.z).addScaledVector(forward, gap);
 }
 
 function ThreeProductionScene({
@@ -3484,6 +3066,9 @@ function ThreeProductionScene({
 
     const lockers = new Map();
     const trailLockers = new Map(); // #4: druga (opozniona) polowa kazdego paczkomatu
+    // Etap 4: zespoly palet (paleta + caly paczkomat) na stanowiskach offline.
+    // Klucz = unit.key; kazdy wpis = { pallet, lead, trail }.
+    const palletAssemblies = new Map();
     const rollers = [];
     const stationWorkers = [];
     let stageOneTemplates = null;
@@ -3492,6 +3077,9 @@ function ThreeProductionScene({
     let lastFittedStageCount = -1;
     let routePoints = [];
     let routeCenter = new THREE.Vector3(0, 0, 0);
+    // Pozycje stanowisk offline (etap 4) — ustawiane w rebuildStatic, czytane w
+    // petli renderu przy animacji palet. Pusta tablica = offline wylaczony.
+    let offlineStationVecs = [];
 
     const rebuildStatic = () => {
       staticGroup.clear();
@@ -3754,9 +3342,17 @@ function ThreeProductionScene({
       // istnieja; te strefy delimituja obszary i niosa 'sectorSlot' na przyszlosc.
       if ((TUNE.sectors?.show ?? true) && routePoints.length) {
         const s = TUNE.sectors ?? {};
-        // Waskie gardlo = stanowisko o najdluzszym czasie montazu -> czerwone.
+        // Waskie gardlo = stanowisko o najdluzszym EFEKTYWNYM czasie -> czerwone.
+        // Etap offline ma N rownoleglych stanowisk, wiec jego czas dzielimy przez N
+        // (gdy offline jest waskim gardlem, jego strefe podswietla Faza 3 osobno).
+        const bnStages = latestRef.current.stages;
+        const bnOffIdx = getOfflineStageIndex(bnStages.length);
+        const bnOffN = Math.max(getOfflineServerCount(), 1);
         let bnIndex = -1, bnMax = -1;
-        latestRef.current.stages.forEach((st, i) => { const d = Math.max(st.duration ?? 0, 0); if (d > bnMax) { bnMax = d; bnIndex = i; } });
+        bnStages.forEach((st, i) => {
+          const d = Math.max(st.duration ?? 0, 0) / (i === bnOffIdx ? bnOffN : 1);
+          if (d > bnMax) { bnMax = d; bnIndex = i; }
+        });
         routePoints.forEach((point, index) => {
           const stage = latestRef.current.stages[index];
           const def = MAINLINE_SECTORS[index] ?? {
@@ -3788,6 +3384,41 @@ function ThreeProductionScene({
         // === ETAP 2+3 STREF: sektory peryferyjne wg planu hali ===
         // Podmontaze, komponenty, magazyny, naprawa, kaciki, bufor podstaw.
         buildPeripheralSectors(staticGroup, routePoints, TUNE.sectors ?? {});
+
+        // === ETAP 4: 2 STANOWISKA OFFLINE + PALETY (poza rolotokiem) ===
+        offlineStationVecs = [];
+        const stagesNow = latestRef.current.stages;
+        if (isOfflineEnabled(stagesNow.length) && (TUNE.offline?.enabled ?? false)) {
+          const off = TUNE.offline ?? {};
+          offlineStationVecs = getOfflineStationVectors(routePoints);
+          offlineStationVecs.forEach((pos, i) => {
+            // Strefa robocza stanowiska (pad + etykieta), jak strefy linii glownej.
+            const zone = createSectorZone({
+              label: `Stanowisko ${i + 1}`,
+              sublabel: 'wykonczenie',
+              color: '#db2777',
+              width: (off.pallet?.width ?? 2.6) + 2.2,
+              depth: (off.pallet?.depth ?? 3.2) + 2.2,
+              opacity: TUNE.sectors?.opacity ?? 0.22,
+              labelHeight: TUNE.sectors?.labelHeight ?? 1.55,
+            });
+            zone.position.set(pos.x, 0.02, pos.z);
+            staticGroup.add(zone);
+            // Spoczywajaca paleta na ziemi (placeholder) — gdy stanowisko puste,
+            // dynamiczna paleta z paczkomatem nakryje ja podczas pracy.
+            const restPallet = createPalletPlaceholder(off.pallet ?? {});
+            restPallet.position.set(pos.x, 0, pos.z);
+            staticGroup.add(restPallet);
+          });
+          // Paleta na koncu rolotoku — na ziemi ZA ostatnia stacja (nie pod tasma),
+          // tam spuszczane sa gotowe paczkomaty na palete (etap 3 -> dojazd).
+          if (off.showEndPallet ?? true) {
+            const endPallet = createPalletPlaceholder(off.pallet ?? {});
+            const endPos = getEndPalletVector(routePoints);
+            endPallet.position.set(endPos.x, 0, endPos.z);
+            staticGroup.add(endPallet);
+          }
+        }
       }
 
       if (routePoints.length) {
@@ -4156,6 +3787,7 @@ function ThreeProductionScene({
 
       const activeNumbers = new Set();
       const activeTrail = new Set();
+      const activePallets = new Set();
       const stagesNow = latestRef.current.stages;
       const trailMap = new Map();
       (latestRef.current.trailUnits ?? []).forEach((t) => trailMap.set(t.key, t));
@@ -4249,7 +3881,89 @@ function ThreeProductionScene({
         );
       };
 
+      // === ETAP 4: paleta z calym paczkomatem na stanowisku offline ===
+      // Dojazd palety (koniec rolotoku -> wolne stanowisko), praca (pojawia sie
+      // dach/daszek/laczenie) i odjazd gotowej palety. Caly, sparowany paczkomat
+      // (obie polowy) jedzie na jednej palecie.
+      const finalizeIdxNow = stagesNow.findIndex((s) => s?.icon === 'finalize');
+      const placeOffline = (unit) => {
+        const stationVec = offlineStationVecs[unit.serverIndex] ?? offlineStationVecs[0];
+        if (!stationVec || !routePoints.length) return;
+        const off = TUNE.offline ?? {};
+        // Start dojazdu = paleta na koncu rolotoku (na ziemi, ZA ostatnia stacja).
+        const endGround = getEndPalletVector(routePoints);
+        const forward = getRouteTangent(routePoints, routePoints.length - 1);
+
+        let palletPos;
+        let finalizeFrac;
+        let showFinishing;
+        if (unit.mode === 'palletTravel') {
+          const t = easeOut(THREE.MathUtils.clamp((unit.travelProgress ?? 0) / 100, 0, 1));
+          palletPos = endGround.clone().lerp(stationVec, t);
+          finalizeFrac = 0.78; // obie polowy stoja na podstawie, bez wykonczenia
+          showFinishing = false;
+        } else if (unit.mode === 'offline') {
+          palletPos = stationVec.clone();
+          // Wykonczenie (dach/daszek/plecy/laczenie) pojawia sie w trakcie pracy.
+          finalizeFrac = 0.78 + 0.22 * THREE.MathUtils.clamp((unit.progress ?? 0) / 100, 0, 1);
+          showFinishing = finalizeFrac > 0.8;
+        } else { // 'offlineDone' — gotowa paleta odjezdza ze stanowiska
+          const t = easeOut(THREE.MathUtils.clamp((unit.travelProgress ?? 0) / 100, 0, 1));
+          palletPos = stationVec.clone().addScaledVector(forward, t * (off.leaveDistance ?? 9));
+          finalizeFrac = 1;
+          showFinishing = true;
+        }
+
+        let assembly = palletAssemblies.get(unit.key);
+        if (!assembly) {
+          assembly = {
+            pallet: createPalletPlaceholder(off.pallet ?? {}),
+            lead: createTwoPartLockerModel(stageOneTemplates),
+            trail: createTwoPartLockerModel(stageOneTemplates),
+          };
+          unitGroup.add(assembly.pallet);
+          unitGroup.add(assembly.lead);
+          unitGroup.add(assembly.trail);
+          palletAssemblies.set(unit.key, assembly);
+        }
+        activePallets.add(unit.key);
+
+        assembly.pallet.visible = true;
+        assembly.pallet.position.set(palletPos.x, 0, palletPos.z);
+
+        const modelY = off.modelY ?? 0.42;
+        const angle = Math.atan2(forward.x, forward.z);
+        const fake = {
+          currentIndex: finalizeIdxNow,
+          assemblyProgress: finalizeFrac * 100,
+          progress: finalizeFrac * 100,
+          mode: 'assembly',
+          number: unit.number,
+        };
+        [['lead', assembly.lead], ['trail', assembly.trail]].forEach(([mode, model]) => {
+          model.visible = true;
+          model.position.set(palletPos.x, modelY, palletPos.z);
+          model.rotation.y = angle;
+          model.scale.setScalar(MODEL_RENDER_SCALE);
+          updateTwoPartLockerModel(
+            model,
+            fake,
+            fake,
+            time,
+            stagesNow,
+            mode,
+            troughLyingPosesRef.current,
+            showFinishing,
+          );
+        });
+      };
+
       latestRef.current.visibleUnits.forEach((unit) => {
+        // Jednostki na etapie offline (paleta poza rolotokiem) renderujemy osobno.
+        if (unit.mode === 'palletTravel' || unit.mode === 'offline' || unit.mode === 'offlineDone') {
+          placeOffline(unit);
+          return;
+        }
         activeNumbers.add(unit.key);
         const trailUnit = trailMap.get(unit.key) ?? null;
 
@@ -4280,6 +3994,13 @@ function ThreeProductionScene({
       });
       trailLockers.forEach((model, number) => {
         if (!activeTrail.has(number)) model.visible = false;
+      });
+      palletAssemblies.forEach((assembly, key) => {
+        if (!activePallets.has(key)) {
+          assembly.pallet.visible = false;
+          assembly.lead.visible = false;
+          assembly.trail.visible = false;
+        }
       });
       renderer.domElement.dataset.scheduleConflicts = String(
         latestRef.current.scheduleConflictCount ?? 0,
@@ -4688,12 +4409,20 @@ function App() {
 
   const throughputPerHour = launchInterval > 0 ? 3600 / launchInterval : 0;
   const throughputPerShift = throughputPerHour * 8;
+  // Bottleneck i wykorzystanie liczone z EFEKTYWNEGO czasu etapu = czas / liczba
+  // rownoleglych serwerow. Etap offline ma N stanowisk, wiec jego efektywny czas
+  // (a wiec i obciazenie) jest N-krotnie mniejszy — 2 stanowiska = 2x przepustowosc.
+  const offlineStageIndex = productionSchedule.offlineStageIndex ?? -1;
+  const offlineServerCount = productionSchedule.offlineServerCount ?? 1;
+  const stageServers = (i) => (i === offlineStageIndex ? Math.max(offlineServerCount, 1) : 1);
+  const effDuration = (st, i) => Math.max(st.duration, 0) / stageServers(i);
   let kpiBnIdx = -1, kpiBnMax = -1;
-  normalizedStages.forEach((st, i) => { if (st.duration > kpiBnMax) { kpiBnMax = st.duration; kpiBnIdx = i; } });
+  normalizedStages.forEach((st, i) => { const e = effDuration(st, i); if (e > kpiBnMax) { kpiBnMax = e; kpiBnIdx = i; } });
   const stageUtilization = normalizedStages.map((st, i) => ({
     name: st.name || `Etap ${i}`,
-    pct: kpiBnMax > 0 ? Math.min(100, (st.duration / kpiBnMax) * 100) : 0,
+    pct: kpiBnMax > 0 ? Math.min(100, (effDuration(st, i) / kpiBnMax) * 100) : 0,
     isBottleneck: i === kpiBnIdx,
+    servers: stageServers(i),
   }));
 
   const handleExportPdf = () => {
