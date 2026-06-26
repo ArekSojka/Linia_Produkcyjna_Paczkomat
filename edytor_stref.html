@@ -49,6 +49,10 @@
   .stationRect { fill:#7c3aed; fill-opacity:0.32; stroke:#a78bfa; stroke-width:2; }
   .stationLbl { fill:#ede9fe; font-size:10px; font-weight:600; text-anchor:middle; }
   .stationMin { fill:#ddd6fe; font-size:9px; text-anchor:middle; }
+  .offRect { fill:#db2777; fill-opacity:0.30; stroke:#f472b6; stroke-width:2; }
+  .offLbl { fill:#fce7f3; font-size:10px; font-weight:600; text-anchor:middle; }
+  .offPath { fill:none; stroke:#f472b6; stroke-width:1.5; stroke-dasharray:6 4; opacity:0.7; }
+  .palletRect { fill:#9a6b3f; fill-opacity:0.55; stroke:#c08552; stroke-width:1.5; }
 </style>
 </head>
 <body>
@@ -70,10 +74,11 @@
 </header>
 <div class="wrap">
   <div class="stage">
-    <svg id="svg" viewBox="0 0 1283 540" preserveAspectRatio="xMidYMid meet" tabindex="0">
+    <svg id="svg" viewBox="0 0 1360 540" preserveAspectRatio="xMidYMid meet" tabindex="0">
       <image id="bgimg" x="0" y="0" width="1283" height="540" opacity="0.55" style="display:none" preserveAspectRatio="none"></image>
       <g id="ref"></g>
       <g id="stations"></g>
+      <g id="offline"></g>
       <g id="sectors"></g>
     </svg>
   </div>
@@ -166,13 +171,26 @@ let sectors = [
 ];
 
 // Pozycje stacji (px) w tym samym ukladzie wsp. co strefy peryferyjne (plan->swiat):
-// px = z / 0.07 + 515. World z etapow: -21,-10,19,39 (rolotok od wejscia do wyjscia).
+// px = z / 0.07 + 515. World z etapow rolotoku: -21,-10,25,39 (od wejscia do konca).
 const STATIONS = [
-  { px:215,  label:'E0 Podmontaż koryt', name:'Podmontaż koryt', minutes:null },
-  { px:372,  label:'E1 Montaż pionów',   name:'Montaż pionów',   minutes:15 },
-  { px:872,  label:'E2 Montaż drzwi',    name:'Montaż drzwi',    minutes:12 },
-  { px:1072, label:'E3 Montaż finalny',  name:'Montaż finalny',  minutes:16 },
+  { px:215,  label:'E0 Podmontaż koryt',    name:'Podmontaż koryt',    minutes:null },
+  { px:372,  label:'E1 Montaż pionów',      name:'Montaż pionów',      minutes:15 },
+  { px:872,  label:'E2 Montaż drzwi',       name:'Montaż drzwi',       minutes:12 },
+  { px:1072, label:'E3 Włożenie w podstawę', name:'Włożenie w podstawę', minutes:16 },
 ];
+
+// ETAP 4 (offline): 2 rownolegle stanowiska wykonczeniowe POZA rolotokiem.
+// Mapowanie jak wyzej: px = x_world/0.07 + ... w poprzek -> py = y_linii + x/0.07.
+// World wg TUNE.offline.stations: {x:-8,z:54} i {x:8,z:54}; koniec rolotoku z=39.
+// px(z) = z/0.07 + 515; py(x) = LINE_PY + x/0.07.
+const OFF_PXSCALE = 0.07, OFF_PXOFF = 515;
+const zToPx = (z) => Math.round(z / OFF_PXSCALE + OFF_PXOFF);
+const xToPy = (x) => Math.round(180 + x / OFF_PXSCALE);
+const OFFLINE_STATIONS = [
+  { label:'E4 Stanowisko 1', x:-8, z:54 },
+  { label:'E4 Stanowisko 2', x: 8, z:54 },
+];
+const CONVEYOR_END = { x:0, z:39 }; // koniec rolotoku (miejsce palety / wlozenia)
 
 const svg = document.getElementById('svg');
 const gSect = document.getElementById('sectors');
@@ -206,6 +224,28 @@ function drawStations(){
   g.innerHTML = h;
 }
 drawStations();
+
+// ETAP 4 (offline): 2 stanowiska wykonczeniowe + palety + sciezka dojazdu.
+// Element ODNIESIENIA (nieedytowalny), tak jak stacje rolotoku E0-E3.
+function drawOffline(){
+  const g = document.getElementById('offline');
+  let h = '';
+  const endPx = zToPx(CONVEYOR_END.z), endPy = xToPy(CONVEYOR_END.x);
+  // Paleta na koncu rolotoku (miejsce wlozenia obu polowek w podstawe, etap 3).
+  h += `<rect class="palletRect" x="${endPx-18}" y="${endPy-22}" width="36" height="44" rx="3"></rect>`;
+  h += `<text class="offLbl" x="${endPx}" y="${endPy+34}" fill="#c08552">paleta (koniec rolotoku)</text>`;
+  OFFLINE_STATIONS.forEach(s=>{
+    const px = zToPx(s.z), py = xToPy(s.x);
+    // Sciezka dojazdu palety: koniec rolotoku -> wolne stanowisko.
+    h += `<line class="offPath" x1="${endPx}" y1="${endPy}" x2="${px}" y2="${py}"></line>`;
+    // Stanowisko (pad) + paleta z paczkomatem.
+    h += `<rect class="offRect" x="${px-STATION_W/2}" y="${py-STATION_H/2}" width="${STATION_W}" height="${STATION_H}" rx="3"></rect>`;
+    h += `<rect class="palletRect" x="${px-18}" y="${py-22}" width="36" height="44" rx="3"></rect>`;
+    h += `<text class="offLbl" x="${px}" y="${py-STATION_H/2-4}">${s.label}</text>`;
+  });
+  g.innerHTML = h;
+}
+drawOffline();
 
 function toSvg(evt){
   const p = svg.createSVGPoint(); p.x = evt.clientX; p.y = evt.clientY;
