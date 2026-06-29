@@ -121,8 +121,8 @@ export const TUNE = {
   // === KOREKTA POZYCJI FINALNEJ (czesci na podstawie) — strojenie milimetrowe ===
   // Dziala dopiero gdy polowy stoja na podstawie. Male wartosci, np. -0.02.
   finalNudgeX: 0,  // bok (X): + na zewnatrz, - do srodka
-  finalNudgeZ: -0.08,  // wzdluz podstawy (Z): + do przodu, - do tylu
-  finalNudgeY: 0,  // gora/dol (Y)
+  finalNudgeZ: 0.09,  // wzdluz podstawy (Z): + do przodu, - do tylu
+  finalNudgeY: 0.08,  // gora/dol (Y)
   // Przeswit drugiej polowy podczas dojazdu nad podstawe. Najpierw konczy ona
   // ruch w bok, a dopiero potem lagodnie opada na docelowa wysokosc. Zapobiega
   // to przenikaniu kolumny przez geometrie podstawy w trakcie laczenia.
@@ -176,8 +176,11 @@ export const TUNE = {
   // pose0/pose1: pozycja KAZDEGO z dwoch koryt podczas lezenia. Zmniejsz offsetX,
   //   jesli jada za bardzo w bok / "zamieniaja sie"; rotationZ pose1 = 180 (obrot).
   troughTurn: {
-    portion: 0.2,
-    arcLift: 0.3,  // <- moja proba: unosi koryta w trakcie obrotu, by nie wpadaly w rolki
+    portion: 0.42,
+    liftBefore: 0.24,
+    settleAfter: 0.2,
+    standLift: 0.82,
+    arcLift: 0.42,  // unosi koryta nad rolki podczas naturalnego ustawiania
     posOffset0: [0, 0, 0], // przesuniecie koryta modulu 0 [x=bok, y=gora/dol, z=wzdluz]
     posOffset1: [0, 0, 0], // przesuniecie koryta modulu 1 [x, y, z]
     pose0: { rotationX: 0, rotationY: 0, rotationZ: 0, offsetX: 1.04, offsetY: 0.7, offsetZ: 0 },
@@ -187,6 +190,11 @@ export const TUNE = {
     large: { rot: [0, 0, 0], pos: [0, 0, 0] }, // duze (srodkowe) koryto
     small: { rot: [0, 0, 0], pos: [0, 0, 0] }, // male koryto
   },
+  // === PODSTAWA ===
+  // Obrot i drobny offset modelu podstawy. Trafia tez do pomiaru wysokosci, wiec
+  // zmiana tu naprawia jednoczesnie render i osadzenie na palecie.
+  baseRot: [Math.PI / 2, 0, 0],
+  baseOffset: [0, 0, 0],
   // === SCIANY BOCZNE ===
   // Obrot POJEDYNCZEJ sciany [rotX, rotY, rotZ] w radianach. Klucz "modul-faza"
   // ('0-first' = lewa sciana modulu 0, '0-second' = prawa, itd.). Domyslnie
@@ -255,6 +263,11 @@ export const TUNE = {
     // Wysokosc (Y, swiat) stojacego paczkomatu na palecie. Reguluj, gdy podstawa
     // lewituje nad paleta lub w nia wnika. ~ wysokosc palety + drobny offset.
     modelY: 0.42,
+    // Automatyczne centrowanie ustawia srodek widocznego paczkomatu na srodku
+    // palety. Ten offset sluzy tylko do drobnego, recznego dostrojenia [x,y,z].
+    modelOffset: [0, 0, 0],
+    // Wysokosc luku podczas opuszczania polowek z rolotoku na palete w etapie 3.
+    landingLift: 0.72,
     // Dystans (swiat), o jaki paleta odjezdza ze stanowiska po wykonczeniu.
     leaveDistance: 9,
     // Paleta stojaca na koncu rolotoku (miejsce wlozenia w podstawe, etap 3).
