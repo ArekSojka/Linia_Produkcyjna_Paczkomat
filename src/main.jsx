@@ -327,6 +327,107 @@ const CONVEYOR_SURFACE_Y = CONVEYOR_ELEVATION + 0.55;
 
 const easeOut = (value) => 1 - Math.pow(1 - value, 3);
 
+const expandVisibleBounds = (object, bounds) => {
+  if (!object?.visible) return bounds;
+
+  if (object.isMesh && object.geometry) {
+    if (!object.geometry.boundingBox) object.geometry.computeBoundingBox();
+    if (object.geometry.boundingBox) {
+      const meshBounds = object.geometry.boundingBox.clone().applyMatrix4(object.matrixWorld);
+      bounds.union(meshBounds);
+    }
+  }
+
+  object.children?.forEach((child) => expandVisibleBounds(child, bounds));
+  return bounds;
+};
+
+const getVisibleWorldBounds = (objects) => {
+  const bounds = new THREE.Box3();
+  objects.forEach((object) => expandVisibleBounds(object, bounds));
+  return bounds.isEmpty() ? null : bounds;
+};
+
+const getPalletAnchorBounds = (models) => {
+  const baseAnchors = models
+    .map((model) => model?.userData?.parts?.base)
+    .filter(Boolean);
+  return getVisibleWorldBounds(baseAnchors) ?? getVisibleWorldBounds(models);
+};
+
+const getPalletLocalAxes = (angle) => ({
+  right: new THREE.Vector3(Math.cos(angle), 0, -Math.sin(angle)),
+  forward: new THREE.Vector3(Math.sin(angle), 0, Math.cos(angle)),
+});
+
+const centerWorldModelsOnPallet = (models, palletWorldPos, angle, offset = [0, 0, 0]) => {
+  const activeModels = models.filter(Boolean);
+  if (!activeModels.length || !palletWorldPos) return;
+  activeModels.forEach((model) => model.updateMatrixWorld(true));
+  const bounds = getPalletAnchorBounds(activeModels);
+  if (!bounds) return;
+
+  const center = bounds.getCenter(new THREE.Vector3());
+  const { right, forward } = getPalletLocalAxes(angle);
+  const target = palletWorldPos.clone()
+    .addScaledVector(right, offset[0] ?? 0)
+    .addScaledVector(forward, offset[2] ?? 0);
+  const delta = target.sub(center);
+  delta.y = 0;
+  activeModels.forEach((model) => {
+    model.position.x += delta.x;
+    model.position.z += delta.z;
+  });
+};
+
+const centerLocalModelsOnPallet = (models, parent, offset = [0, 0, 0]) => {
+  const activeModels = models.filter(Boolean);
+  if (!activeModels.length || !parent) return;
+  parent.updateMatrixWorld(true);
+  const bounds = getPalletAnchorBounds(activeModels);
+  if (!bounds) return;
+
+  const centerLocal = parent.worldToLocal(bounds.getCenter(new THREE.Vector3()));
+  const deltaX = (offset[0] ?? 0) - centerLocal.x;
+  const deltaZ = (offset[2] ?? 0) - centerLocal.z;
+  activeModels.forEach((model) => {
+    model.position.x += deltaX;
+    model.position.z += deltaZ;
+  });
+};
+
+const getTroughStandMotion = (rawProgress) => {
+  const cfg = TUNE.troughTurn ?? {};
+  const sequenceProgress = easeOut(THREE.MathUtils.clamp(
+    rawProgress / Math.max(cfg.portion ?? 0.42, 0.01),
+    0,
+    1,
+  ));
+  const liftBefore = THREE.MathUtils.clamp(cfg.liftBefore ?? 0.24, 0.02, 0.72);
+  const settleAfter = THREE.MathUtils.clamp(cfg.settleAfter ?? 0.2, 0.02, 0.72);
+  const turnSpan = Math.max(0.05, 1 - liftBefore - settleAfter);
+  const liftProgress = easeOut(THREE.MathUtils.clamp(sequenceProgress / liftBefore, 0, 1));
+  const turnProgress = easeOut(THREE.MathUtils.clamp((sequenceProgress - liftBefore) / turnSpan, 0, 1));
+  const settleProgress = easeOut(THREE.MathUtils.clamp(
+    (sequenceProgress - (1 - settleAfter)) / settleAfter,
+    0,
+    1,
+  ));
+  const standLift = cfg.standLift ?? 0.82;
+  const arcLift = cfg.arcLift ?? 0.42;
+
+  return {
+    sequenceProgress,
+    liftProgress,
+    turnProgress,
+    settleProgress,
+    lyingAmount: 1 - turnProgress,
+    clearanceLift:
+      standLift * liftProgress * (1 - settleProgress)
+      + Math.sin(turnProgress * Math.PI) * arcLift,
+  };
+};
+
 const getRouteTangent = (points, index) => {
   if (points.length < 2) return new THREE.Vector3(0, 0, 1);
   const previous = points[Math.max(index - 1, 0)];
@@ -2379,16 +2480,23 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
     : makeBox(4.58, 0.36, 1.38, '#24282d', 'joinedBase');
   base.name = stageOneTemplates?.base ? 'glbJoinedBase' : 'joinedBase';
   if (stageOneTemplates?.base) {
-    // Podstawa byla "do gory nogami" (PI/2) i zwinieta w punkcie (0, y, 0).
-    // Odwracamy o 180 stopni (-PI/2) i stawiamy POD kolumna (Z = miejsce,
-    // gdzie staja polowki), zamiast z boku tasmy.
-    base.rotation.x = -Math.PI / 2;
-    base.position.set(0, stageOneTemplates.standingOffsetY, ASSEMBLY_HALF_LENGTH);
+    const baseRot = TUNE.baseRot ?? [Math.PI / 2, 0, 0];
+    const baseOffset = TUNE.baseOffset ?? [0, 0, 0];
+    // Podstawa jest osobnym modelem GLB i trafia na palete; jej orientacja jest
+    // w TUNE, zeby szybko poprawic eksport odwrócony z Blendera.
+    base.rotation.set(baseRot[0] ?? 0, baseRot[1] ?? 0, baseRot[2] ?? 0);
+    base.position.set(
+      baseOffset[0] ?? 0,
+      stageOneTemplates.standingOffsetY + (baseOffset[1] ?? 0),
+      ASSEMBLY_HALF_LENGTH + (baseOffset[2] ?? 0),
+    );
     base.userData.targetZ = ASSEMBLY_HALF_LENGTH;
   } else {
     base.position.set(0, -0.13, -ASSEMBLY_HALF_LENGTH);
   }
-  base.userData.targetY = stageOneTemplates?.base ? stageOneTemplates.standingOffsetY : -0.13;
+  base.userData.targetY = stageOneTemplates?.base
+    ? stageOneTemplates.standingOffsetY + (TUNE.baseOffset?.[1] ?? 0)
+    : -0.13;
   group.add(base);
 
   const baseFront = stageOneTemplates?.base
@@ -2528,6 +2636,7 @@ function updateTwoPartLockerModel(
   // jest tylko wlozenie obu polowek w podstawe na palecie. Faza 3 wlaczy ten
   // tryb dla modelu na stanowisku; tu domyslnie WYLACZONY.
   showFinishing = false,
+  finalLanding = null,
 ) {
   const parts = group.userData.parts;
   const stageIndex = (icon) => stages.findIndex((candidate) => candidate.icon === icon);
@@ -2614,10 +2723,10 @@ function updateTwoPartLockerModel(
 
   parts.troughAssemblies.forEach((assembly) => {
     const moduleIndex = assembly.userData.moduleIndex ?? 0;
-    const troughTurnProgress = smooth(modFr(moduleIndex).structure / (TUNE.troughTurn?.portion ?? 0.2));
-    // Etapy 0 i 1: zestaw lezy plasko. Dopiero poczatek etapu 2 podnosi
-    // koryto razem z zamontowanymi juz zamkami do pozycji pionowej.
-    const lyingAmount = 1 - troughTurnProgress;
+    const troughMotion = getTroughStandMotion(modFr(moduleIndex).structure);
+    // Etap 1: najpierw unosimy koryto nad rolki, dopiero potem obracamy i
+    // osadzamy. Dzieki temu model nie przecina rolotoku w trakcie ustawiania.
+    const lyingAmount = troughMotion.lyingAmount;
     const troughPosOffset = (moduleIndex === 0 ? TUNE.troughTurn?.posOffset0 : TUNE.troughTurn?.posOffset1) ?? [0, 0, 0];
     assembly.rotation.set(0, 0, -Math.PI * 0.5 * lyingAmount);
     assembly.position.x = THREE.MathUtils.lerp(
@@ -2629,15 +2738,15 @@ function updateTwoPartLockerModel(
       assembly.userData.targetY,
       assembly.userData.targetY + assembly.userData.lyingOffsetY,
       lyingAmount,
-    ) + Math.sin(THREE.MathUtils.clamp(troughTurnProgress, 0, 1) * Math.PI) * (TUNE.troughTurn?.arcLift ?? 0) + (troughPosOffset[1] ?? 0);
+    ) + troughMotion.clearanceLift + (troughPosOffset[1] ?? 0);
     assembly.position.z = 0 + (troughPosOffset[2] ?? 0);
   });
 
   // Knoby steruja bezposrednio DWOMA fizycznymi modelami koryt, a nie wspolnym
   // pivotem polowy paczkomatu. Odpowiadajace sobie koryta obu polow korzystaja
   // z tego samego zestawu korekt, ale nigdy nie obracaja drugiego typu koryta.
-  const applyLyingPose = (object, pose, troughTurnProgress, fixed) => {
-    const lyingAmount = 1 - troughTurnProgress;
+  const applyLyingPose = (object, pose, troughMotion, fixed) => {
+    const lyingAmount = troughMotion.lyingAmount;
     const fRot = fixed?.rot ?? [0, 0, 0];
     const fPos = fixed?.pos ?? [0, 0, 0];
     object.rotation.set(
@@ -2654,18 +2763,18 @@ function updateTwoPartLockerModel(
   parts.troughComponents.forEach((component) => {
     const componentIndex = component.userData.componentIndex ?? 0;
     const moduleIndex = component.userData.moduleIndex ?? 0;
-    const troughTurnProgress = smooth(modFr(moduleIndex).structure / (TUNE.troughTurn?.portion ?? 0.2));
+    const troughMotion = getTroughStandMotion(modFr(moduleIndex).structure);
     const pose = (componentIndex === 0 ? TUNE.troughTurn?.pose0 : TUNE.troughTurn?.pose1) ?? troughLyingPoses[componentIndex] ?? DEFAULT_TROUGH_LYING_POSE;
     const troughFixed = componentIndex === 0 ? TUNE.troughTurn?.large : TUNE.troughTurn?.small;
-    applyLyingPose(component, pose, troughTurnProgress, troughFixed);
+    applyLyingPose(component, pose, troughMotion, troughFixed);
   });
   // Zamki sa montowane na pierwszym (wiekszym) korycie, dlatego przez etapy
   // 0 i 1 dostaja dokladnie ten sam obrot i przesuniecie co Koryto 1.
   const lockTroughPose = TUNE.troughTurn?.pose0 ?? troughLyingPoses[0] ?? DEFAULT_TROUGH_LYING_POSE;
   parts.lockPosePivots.forEach((pivot) => {
     const moduleIndex = pivot.userData.moduleIndex ?? 0;
-    const troughTurnProgress = smooth(modFr(moduleIndex).structure / (TUNE.troughTurn?.portion ?? 0.2));
-    applyLyingPose(pivot, lockTroughPose, troughTurnProgress);
+    const troughMotion = getTroughStandMotion(modFr(moduleIndex).structure);
+    applyLyingPose(pivot, lockTroughPose, troughMotion);
   });
 
   const animateWall = (wall, progress) => {
@@ -2741,7 +2850,9 @@ function updateTwoPartLockerModel(
     baseParentLiftProgress,
   );
   const baseWorldAnchorCompensation = (
-    TUNE.standingY - currentParentLift
+    finalLanding?.enabled
+      ? 0
+      : TUNE.standingY - currentParentLift
   ) / MODEL_RENDER_SCALE;
   [parts.base, parts.baseFront].forEach((part) => {
     setPartOpacity(part, baseProgress);
@@ -2790,6 +2901,14 @@ function updateTwoPartLockerModel(
     ) + gap + outwardSign * (TUNE.finalNudgeX ?? 0) * finalNudge;
     root.position.y = settle + approachLift + (TUNE.finalNudgeY ?? 0) * finalNudge;
     root.position.z = centeredZ + (TUNE.finalNudgeZ ?? 0) * finalNudge;
+    if (finalLanding?.enabled) {
+      const landingProgress = smooth((fr.finalize - 0.08) / 0.56);
+      const landingRemain = 1 - landingProgress;
+      root.position.x += (finalLanding.offsetX ?? 0) * landingRemain;
+      root.position.y += (finalLanding.offsetY ?? 0) * landingRemain
+        + Math.sin(landingProgress * Math.PI) * (finalLanding.arcLift ?? 0);
+      root.position.z += (finalLanding.offsetZ ?? 0) * landingRemain;
+    }
   });
 
   // Laczenie, plecy, dach i daszek pojawiaja sie wzgledem DRUGIEJ (pozniejszej)
@@ -3067,7 +3186,7 @@ function ThreeProductionScene({
     const lockers = new Map();
     const trailLockers = new Map(); // #4: druga (opozniona) polowa kazdego paczkomatu
     // Etap 4: zespoly palet (paleta + caly paczkomat) na stanowiskach offline.
-    // Klucz = unit.key; kazdy wpis = { pallet, lead, trail }.
+    // Klucz = unit.key; kazdy wpis = { carrier, pallet, lead, trail }.
     const palletAssemblies = new Map();
     const rollers = [];
     const stationWorkers = [];
@@ -3080,11 +3199,13 @@ function ThreeProductionScene({
     // Pozycje stanowisk offline (etap 4) — ustawiane w rebuildStatic, czytane w
     // petli renderu przy animacji palet. Pusta tablica = offline wylaczony.
     let offlineStationVecs = [];
+    let endPalletStandby = null;
 
     const rebuildStatic = () => {
       staticGroup.clear();
       rollers.length = 0;
       stationWorkers.length = 0;
+      endPalletStandby = null;
       routePoints = buildLinePoints(latestRef.current.stages.length);
       const rollerMaterial = makeMaterial(ROLLER_COLOR, 0.38, 0.58);
       // Rolki w strefie bufora (przelot) - inny, jasnoszary kolor dla wyroznienia.
@@ -3404,11 +3525,6 @@ function ThreeProductionScene({
             });
             zone.position.set(pos.x, 0.02, pos.z);
             staticGroup.add(zone);
-            // Spoczywajaca paleta na ziemi (placeholder) — gdy stanowisko puste,
-            // dynamiczna paleta z paczkomatem nakryje ja podczas pracy.
-            const restPallet = createPalletPlaceholder(off.pallet ?? {});
-            restPallet.position.set(pos.x, 0, pos.z);
-            staticGroup.add(restPallet);
           });
           // Paleta na koncu rolotoku — na ziemi ZA ostatnia stacja (nie pod tasma),
           // tam spuszczane sa gotowe paczkomaty na palete (etap 3 -> dojazd).
@@ -3416,6 +3532,7 @@ function ThreeProductionScene({
             const endPallet = createPalletPlaceholder(off.pallet ?? {});
             const endPos = getEndPalletVector(routePoints);
             endPallet.position.set(endPos.x, 0, endPos.z);
+            endPalletStandby = endPallet;
             staticGroup.add(endPallet);
           }
         }
@@ -3678,7 +3795,8 @@ function ThreeProductionScene({
       const sharedScale = ASSEMBLY_LENGTH / Math.max(troughSize.z, 0.001);
       const baseTemplate = prepareAlignedComponent(baseGltf.scene, sharedScale);
       const standingBaseProbe = baseTemplate.clone(true);
-      standingBaseProbe.rotation.x = -Math.PI / 2; // zgodnie z odwroceniem podstawy
+      const baseRot = TUNE.baseRot ?? [Math.PI / 2, 0, 0];
+      standingBaseProbe.rotation.set(baseRot[0] ?? 0, baseRot[1] ?? 0, baseRot[2] ?? 0);
       standingBaseProbe.updateMatrixWorld(true);
       const standingBaseBounds = new THREE.Box3().setFromObject(standingBaseProbe);
       const standingOffsetY = -0.13 - standingBaseBounds.min.y;
@@ -3727,6 +3845,8 @@ function ThreeProductionScene({
       lockers.clear();
       trailLockers.forEach((model) => unitGroup.remove(model));
       trailLockers.clear();
+      palletAssemblies.forEach((assembly) => unitGroup.remove(assembly.carrier));
+      palletAssemblies.clear();
       setStageOneModelStatus('ready');
 
       // === Opcjonalny model polek + drzwi (drop-in) ===
@@ -3764,6 +3884,8 @@ function ThreeProductionScene({
         lockers.clear();
         trailLockers.forEach((model) => unitGroup.remove(model));
         trailLockers.clear();
+        palletAssemblies.forEach((assembly) => unitGroup.remove(assembly.carrier));
+        palletAssemblies.clear();
         console.info('Podpieto model polek + drzwi z GLB.');
       }).catch(() => {
         // Brak pliku - OK, korzystamy z proceduralnych zaslepek.
@@ -3788,6 +3910,7 @@ function ThreeProductionScene({
       const activeNumbers = new Set();
       const activeTrail = new Set();
       const activePallets = new Set();
+      let endPalletBusy = false;
       const stagesNow = latestRef.current.stages;
       const trailMap = new Map();
       (latestRef.current.trailUnits ?? []).forEach((t) => trailMap.set(t.key, t));
@@ -3820,13 +3943,9 @@ function ThreeProductionScene({
         const structureProgress = stage?.icon === 'shelves'
           ? THREE.MathUtils.clamp((poseUnit.assemblyProgress ?? poseUnit.progress ?? 0) / 100, 0, 1)
           : 0;
-        const troughTurnProgress = stage?.icon === 'shelves'
-          ? easeOut(THREE.MathUtils.clamp(
-            structureProgress / (TUNE.troughTurn?.portion ?? 0.2),
-            0,
-            1,
-          ))
-          : 0;
+        const troughMotion = stage?.icon === 'shelves'
+          ? getTroughStandMotion(structureProgress)
+          : { turnProgress: 0, clearanceLift: 0 };
         let horizontalLift = (
           poseUnit.mode === 'entry'
           || stage?.icon === 'locks'
@@ -3835,18 +3954,53 @@ function ThreeProductionScene({
           ? preTurnHorizontalLift
           : baseHorizontalLift;
         if (stage?.icon === 'shelves') {
-          horizontalLift = THREE.MathUtils.lerp(preTurnHorizontalLift, baseHorizontalLift, troughTurnProgress);
+          horizontalLift = THREE.MathUtils.lerp(
+            preTurnHorizontalLift,
+            baseHorizontalLift,
+            troughMotion.turnProgress,
+          );
         }
         const conveyorLift = isStandingStage
           ? THREE.MathUtils.lerp(horizontalLift, TUNE.standingY, standingLiftProgress)
           : horizontalLift;
+        const usePalletLanding = isStandingStage
+          && isOfflineEnabled(stagesNow.length)
+          && (TUNE.offline?.enabled ?? false)
+          && routePoints.length > 0;
+        let finalLanding = null;
+        let palletLandingWorld = null;
+        let palletLandingAngle = pose.angle;
         model.visible = true;
-        model.position.copy(pose.position);
-        model.position.y = isHorizontalAssembly
-          ? MODEL_LINE_Y + conveyorLift
-          : MODEL_LINE_Y + conveyorLift + Math.sin(time * 2 + poseUnit.number) * 0.018;
+        if (usePalletLanding) {
+          const off = TUNE.offline ?? {};
+          const endGround = getEndPalletVector(routePoints);
+          const forward = getRouteTangent(routePoints, routePoints.length - 1);
+          const angle = Math.atan2(forward.x, forward.z);
+          const right = new THREE.Vector3(Math.cos(angle), 0, -Math.sin(angle));
+          const startWorldY = MODEL_LINE_Y + horizontalLift;
+          const modelOffset = off.modelOffset ?? [0, 0, 0];
+          const targetWorldY = (off.modelY ?? 0.42) + (modelOffset[1] ?? 0);
+          const deltaFromPallet = pose.position.clone().sub(endGround);
+          finalLanding = {
+            enabled: true,
+            offsetX: deltaFromPallet.dot(right) / MODEL_RENDER_SCALE,
+            offsetY: (startWorldY - targetWorldY) / MODEL_RENDER_SCALE,
+            offsetZ: deltaFromPallet.dot(forward) / MODEL_RENDER_SCALE,
+            arcLift: (off.landingLift ?? 0.72) / MODEL_RENDER_SCALE,
+          };
+          palletLandingWorld = endGround.clone();
+          palletLandingAngle = angle;
+          if (halfMode === 'lead') showEndPalletForUnit(poseUnit);
+          model.position.set(endGround.x, targetWorldY, endGround.z);
+          model.rotation.y = angle;
+        } else {
+          model.position.copy(pose.position);
+          model.position.y = isHorizontalAssembly
+            ? MODEL_LINE_Y + conveyorLift
+            : MODEL_LINE_Y + conveyorLift + Math.sin(time * 2 + poseUnit.number) * 0.018;
+        }
 
-        if (halfMode === 'trail' && (isApproachingStandingStage || isStandingStage)) {
+        if (halfMode === 'trail' && !usePalletLanding && (isApproachingStandingStage || isStandingStage)) {
           let sideClearance;
           if (isApproachingStandingStage) {
             // Zjedz na boczny tor JESZCZE W CZASIE DOJAZDU. Na koncu przejazdu
@@ -3868,7 +4022,9 @@ function ThreeProductionScene({
           model.position.z -= Math.sin(pose.angle) * sideClearance;
         }
 
-        model.rotation.y += Math.atan2(Math.sin(pose.angle - model.rotation.y), Math.cos(pose.angle - model.rotation.y)) * 0.16;
+        if (!usePalletLanding) {
+          model.rotation.y += Math.atan2(Math.sin(pose.angle - model.rotation.y), Math.cos(pose.angle - model.rotation.y)) * 0.16;
+        }
         model.scale.setScalar(MODEL_RENDER_SCALE);
         updateTwoPartLockerModel(
           model,
@@ -3878,7 +4034,15 @@ function ThreeProductionScene({
           stagesNow,
           halfMode,
           troughLyingPosesRef.current,
+          false,
+          finalLanding,
         );
+
+        return {
+          palletLanding: usePalletLanding,
+          palletWorld: palletLandingWorld,
+          angle: palletLandingAngle,
+        };
       };
 
       // === ETAP 4: paleta z calym paczkomatem na stanowisku offline ===
@@ -3886,6 +4050,47 @@ function ThreeProductionScene({
       // dach/daszek/laczenie) i odjazd gotowej palety. Caly, sparowany paczkomat
       // (obie polowy) jedzie na jednej palecie.
       const finalizeIdxNow = stagesNow.findIndex((s) => s?.icon === 'finalize');
+      const ensurePalletAssembly = (key, off) => {
+        let assembly = palletAssemblies.get(key);
+        if (!assembly) {
+          const carrier = new THREE.Group();
+          carrier.name = `palletCarrier-${key}`;
+          const pallet = createPalletPlaceholder(off.pallet ?? {});
+          const lead = createTwoPartLockerModel(stageOneTemplates);
+          const trail = createTwoPartLockerModel(stageOneTemplates);
+          carrier.add(pallet);
+          carrier.add(lead);
+          carrier.add(trail);
+          unitGroup.add(carrier);
+          assembly = { carrier, pallet, lead, trail };
+          palletAssemblies.set(key, assembly);
+        }
+        return assembly;
+      };
+
+      const setCarrierPose = (assembly, worldPos, angle) => {
+        assembly.carrier.visible = true;
+        assembly.carrier.position.set(worldPos.x, 0, worldPos.z);
+        assembly.carrier.rotation.y = angle;
+        assembly.pallet.visible = true;
+        assembly.pallet.position.set(0, 0, 0);
+        assembly.pallet.rotation.set(0, 0, 0);
+      };
+
+      const showEndPalletForUnit = (unit) => {
+        if (!(TUNE.offline?.showEndPallet ?? true) || !routePoints.length) return;
+        const off = TUNE.offline ?? {};
+        const endGround = getEndPalletVector(routePoints);
+        const forward = getRouteTangent(routePoints, routePoints.length - 1);
+        const angle = Math.atan2(forward.x, forward.z);
+        const assembly = ensurePalletAssembly(unit.key, off);
+        activePallets.add(unit.key);
+        endPalletBusy = true;
+        setCarrierPose(assembly, endGround, angle);
+        assembly.lead.visible = false;
+        assembly.trail.visible = false;
+      };
+
       const placeOffline = (unit) => {
         const stationVec = offlineStationVecs[unit.serverIndex] ?? offlineStationVecs[0];
         if (!stationVec || !routePoints.length) return;
@@ -3893,6 +4098,7 @@ function ThreeProductionScene({
         // Start dojazdu = paleta na koncu rolotoku (na ziemi, ZA ostatnia stacja).
         const endGround = getEndPalletVector(routePoints);
         const forward = getRouteTangent(routePoints, routePoints.length - 1);
+        const angle = Math.atan2(forward.x, forward.z);
 
         let palletPos;
         let finalizeFrac;
@@ -3914,25 +4120,16 @@ function ThreeProductionScene({
           showFinishing = true;
         }
 
-        let assembly = palletAssemblies.get(unit.key);
-        if (!assembly) {
-          assembly = {
-            pallet: createPalletPlaceholder(off.pallet ?? {}),
-            lead: createTwoPartLockerModel(stageOneTemplates),
-            trail: createTwoPartLockerModel(stageOneTemplates),
-          };
-          unitGroup.add(assembly.pallet);
-          unitGroup.add(assembly.lead);
-          unitGroup.add(assembly.trail);
-          palletAssemblies.set(unit.key, assembly);
-        }
+        const assembly = ensurePalletAssembly(unit.key, off);
         activePallets.add(unit.key);
+        if (unit.mode === 'palletTravel' && (unit.travelProgress ?? 0) < 35) {
+          endPalletBusy = true;
+        }
 
-        assembly.pallet.visible = true;
-        assembly.pallet.position.set(palletPos.x, 0, palletPos.z);
+        setCarrierPose(assembly, palletPos, angle);
 
-        const modelY = off.modelY ?? 0.42;
-        const angle = Math.atan2(forward.x, forward.z);
+        const modelOffset = off.modelOffset ?? [0, 0, 0];
+        const modelY = (off.modelY ?? 0.42) + (modelOffset[1] ?? 0);
         const fake = {
           currentIndex: finalizeIdxNow,
           assemblyProgress: finalizeFrac * 100,
@@ -3942,8 +4139,8 @@ function ThreeProductionScene({
         };
         [['lead', assembly.lead], ['trail', assembly.trail]].forEach(([mode, model]) => {
           model.visible = true;
-          model.position.set(palletPos.x, modelY, palletPos.z);
-          model.rotation.y = angle;
+          model.position.set(0, modelY, 0);
+          model.rotation.set(0, 0, 0);
           model.scale.setScalar(MODEL_RENDER_SCALE);
           updateTwoPartLockerModel(
             model,
@@ -3956,6 +4153,11 @@ function ThreeProductionScene({
             showFinishing,
           );
         });
+        centerLocalModelsOnPallet(
+          [assembly.lead, assembly.trail],
+          assembly.carrier,
+          modelOffset,
+        );
       };
 
       latestRef.current.visibleUnits.forEach((unit) => {
@@ -3974,7 +4176,7 @@ function ThreeProductionScene({
           lockers.set(unit.key, leadModel);
           unitGroup.add(leadModel);
         }
-        placeHalf(leadModel, unit, unit, trailUnit, 'lead');
+        const leadPlacement = placeHalf(leadModel, unit, unit, trailUnit, 'lead');
 
         // OGON (modul 1) ma osobny harmonogram i osobne rezerwacje zasobow.
         if (trailUnit) {
@@ -3985,7 +4187,24 @@ function ThreeProductionScene({
             trailLockers.set(unit.key, trailModel);
             unitGroup.add(trailModel);
           }
-          placeHalf(trailModel, trailUnit, unit, trailUnit, 'trail');
+          const trailPlacement = placeHalf(trailModel, trailUnit, unit, trailUnit, 'trail');
+          const palletModels = [leadPlacement?.palletLanding ? leadModel : null];
+          if (trailPlacement?.palletLanding) palletModels.push(trailModel);
+          if (leadPlacement?.palletLanding) {
+            centerWorldModelsOnPallet(
+              palletModels,
+              leadPlacement.palletWorld,
+              leadPlacement.angle,
+              TUNE.offline?.modelOffset ?? [0, 0, 0],
+            );
+          }
+        } else if (leadPlacement?.palletLanding) {
+          centerWorldModelsOnPallet(
+            [leadModel],
+            leadPlacement.palletWorld,
+            leadPlacement.angle,
+            TUNE.offline?.modelOffset ?? [0, 0, 0],
+          );
         }
       });
 
@@ -3995,8 +4214,12 @@ function ThreeProductionScene({
       trailLockers.forEach((model, number) => {
         if (!activeTrail.has(number)) model.visible = false;
       });
+      if (endPalletStandby) {
+        endPalletStandby.visible = !endPalletBusy;
+      }
       palletAssemblies.forEach((assembly, key) => {
         if (!activePallets.has(key)) {
+          assembly.carrier.visible = false;
           assembly.pallet.visible = false;
           assembly.lead.visible = false;
           assembly.trail.visible = false;
