@@ -326,6 +326,10 @@ const DOOR_XS_MODEL_URL = '/models/components/door-xs.glb';
 const CONVEYOR_SURFACE_Y = CONVEYOR_ELEVATION + 0.55;
 
 const easeOut = (value) => 1 - Math.pow(1 - value, 3);
+// Smoothstep: zerowa predkosc na starcie I koncu. Uzywana dla ruchow, ktore
+// startuja z bezruchu (np. stawianie do pionu na etapie 3) - easeOut rusza
+// z maksymalna predkoscia od pierwszej klatki, co wyglada jak przeskok.
+const easeInOut = (value) => value * value * (3 - 2 * value);
 
 const expandVisibleBounds = (object, bounds) => {
   if (!object?.visible) return bounds;
@@ -2702,6 +2706,10 @@ function updateTwoPartLockerModel(
   const parts = group.userData.parts;
   const stageIndex = (icon) => stages.findIndex((candidate) => candidate.icon === icon);
   const smooth = (value) => easeOut(THREE.MathUtils.clamp(value, 0, 1));
+  // Ruchy CALEJ polowy na etapie 3 (pion, ladowanie na palete, dosuwanie)
+  // startuja z pelnego bezruchu - musza ruszac z zerowa predkoscia, inaczej
+  // pierwsza klatka robi widoczny przeskok.
+  const smoothInOut = (value) => easeInOut(THREE.MathUtils.clamp(value, 0, 1));
   const finalizeIndex = stageIndex('finalize');
 
   // === #4 (osobne obiekty): frakcje montazu liczone NIEZALEZNIE dla kazdej
@@ -2912,7 +2920,8 @@ function updateTwoPartLockerModel(
   // Cala grupa modelu schodzi z wysokosci poziomej (0.34) do standingY w
   // trakcie pionowania. Podstawa jest jej dzieckiem, wiec bez kompensacji
   // pojawialaby sie wysoko nad rolkami i opadala razem z rodzicem.
-  const baseParentLiftProgress = smooth((finalizeBuild - 0.1) / 0.35);
+  // UWAGA: to samo okno i krzywa co standingLiftProgress w placeHalf.
+  const baseParentLiftProgress = smoothInOut((finalizeBuild - 0.1) / 0.35);
   const currentParentLift = THREE.MathUtils.lerp(
     0.34,
     TUNE.standingY,
@@ -2942,15 +2951,15 @@ function updateTwoPartLockerModel(
   parts.moduleRoots.forEach((root) => {
     const isFirstModule = root.userData.moduleIndex === 0;
     const fr = modFr(root.userData.moduleIndex);
-    const liftProgress = smooth((fr.finalize - 0.1) / 0.35);
-    const joinProgress = smooth((fr.finalize - 0.5) / 0.25);
+    const liftProgress = smoothInOut((fr.finalize - 0.1) / 0.35);
+    const joinProgress = smoothInOut((fr.finalize - 0.5) / 0.25);
     // Druga polowa konczy dojazd w bok przed rozpoczeciem opuszczania. Wczesniej
     // oba ruchy zachodzily jednoczesnie, przez co dol kolumny przecinal podstawe.
-    const secondHalfSlideProgress = smooth((fr.finalize - 0.5) / 0.18);
-    const secondHalfLandingProgress = smooth((fr.finalize - 0.68) / 0.12);
+    const secondHalfSlideProgress = smoothInOut((fr.finalize - 0.5) / 0.18);
+    const secondHalfLandingProgress = smoothInOut((fr.finalize - 0.68) / 0.12);
     const horizontalProgress = isFirstModule ? joinProgress : secondHalfSlideProgress;
     const landingProgress = isFirstModule ? joinProgress : secondHalfLandingProgress;
-    const uprightForLanding = smooth((fr.finalize - 0.38) / 0.12);
+    const uprightForLanding = smoothInOut((fr.finalize - 0.38) / 0.12);
     const approachLift = isFirstModule
       ? 0
       : (TUNE.secondHalfApproachLift ?? 0.32)
@@ -2971,7 +2980,7 @@ function updateTwoPartLockerModel(
     root.position.y = settle + approachLift + (TUNE.finalNudgeY ?? 0) * finalNudge;
     root.position.z = centeredZ + (TUNE.finalNudgeZ ?? 0) * finalNudge;
     if (finalLanding?.enabled) {
-      const landingProgress = smooth((fr.finalize - 0.08) / 0.56);
+      const landingProgress = smoothInOut((fr.finalize - 0.08) / 0.56);
       const landingRemain = 1 - landingProgress;
       root.position.x += (finalLanding.offsetX ?? 0) * landingRemain;
       root.position.y += (finalLanding.offsetY ?? 0) * landingRemain
@@ -4004,8 +4013,10 @@ function ThreeProductionScene({
         // Nie przeskakuj od razu z wysokosci poziomej na stojaca. Opuszczanie
         // calego modelu ma ten sam zakres czasu co obrot kolumny do pionu,
         // dzieki czemu poczatek animacji nie zapada sie pod rolki.
+        // UWAGA: ta sama krzywa i okno co baseParentLiftProgress + liftProgress
+        // w updateTwoPartLockerModel - inaczej podstawa plywa w swiecie.
         const standingLiftProgress = isStandingStage
-          ? easeOut(THREE.MathUtils.clamp((finalizeProgress - 0.1) / 0.35, 0, 1))
+          ? easeInOut(THREE.MathUtils.clamp((finalizeProgress - 0.1) / 0.35, 0, 1))
           : 0;
         const baseHorizontalLift = TUNE.horizontalLift ?? 0.34;
         const preTurnHorizontalLift = TUNE.preTurnHorizontalLift ?? baseHorizontalLift;
@@ -4049,7 +4060,39 @@ function ThreeProductionScene({
           const startWorldY = MODEL_LINE_Y + horizontalLift;
           const modelOffset = off.modelOffset ?? [0, 0, 0];
           const targetWorldY = (off.modelY ?? 0.42) + (modelOffset[1] ?? 0);
-          const deltaFromPallet = pose.position.clone().sub(endGround);
+          // Srodek podstawy (anchor centrowania na palecie) w ukladzie LOKALNYM
+          // modelu - stala geometria, liczona raz. centerWorldModelsOnPallet
+          // dosuwa modele o (paleta - srodek podstawy); gdybysmy liczyli offsety
+          // ladowania wzgledem samego endGround, to dosuniecie pojawialoby sie
+          // SKOKOWO w klatce przelaczenia travel->etap 3 (widoczny przeskok
+          // paczkomatu tuz przed pionowaniem). Dlatego to samo przesuniecie
+          // wliczamy analitycznie w pozycje modelu i offsety - centrowanie
+          // koncowe dostaje wtedy delte ~0 i niczego nie szarpie.
+          let anchorLocal = model.userData.palletAnchorLocalXZ;
+          if (!anchorLocal) {
+            model.updateMatrixWorld(true);
+            const anchorBox = new THREE.Box3();
+            [model.userData.parts.base, model.userData.parts.baseFront]
+              .filter(Boolean)
+              .forEach((part) => anchorBox.expandByObject(part));
+            if (anchorBox.isEmpty()) {
+              anchorLocal = { x: 0, z: 0 };
+            } else {
+              const centerLocal = model.worldToLocal(anchorBox.getCenter(new THREE.Vector3()));
+              anchorLocal = { x: centerLocal.x, z: centerLocal.z };
+            }
+            model.userData.palletAnchorLocalXZ = anchorLocal;
+          }
+          const anchorWorldOffset = new THREE.Vector3(anchorLocal.x, 0, anchorLocal.z)
+            .multiplyScalar(MODEL_RENDER_SCALE)
+            .applyEuler(new THREE.Euler(0, angle, 0));
+          // Ten sam cel co centerWorldModelsOnPallet: srodek palety + reczne
+          // strojenie modelOffset (x/z).
+          const landingGround = endGround.clone()
+            .addScaledVector(right, modelOffset[0] ?? 0)
+            .addScaledVector(forward, modelOffset[2] ?? 0)
+            .sub(anchorWorldOffset);
+          const deltaFromPallet = pose.position.clone().sub(landingGround);
           finalLanding = {
             enabled: true,
             offsetX: deltaFromPallet.dot(right) / MODEL_RENDER_SCALE,
@@ -4060,7 +4103,7 @@ function ThreeProductionScene({
           palletLandingWorld = endGround.clone();
           palletLandingAngle = angle;
           if (halfMode === 'lead') showEndPalletForUnit(poseUnit);
-          model.position.set(endGround.x, targetWorldY, endGround.z);
+          model.position.set(landingGround.x, targetWorldY, landingGround.z);
           model.rotation.y = angle;
         } else {
           model.position.copy(pose.position);
@@ -4079,11 +4122,11 @@ function ThreeProductionScene({
               0,
               1,
             );
-            sideClearance = -SECOND_HALF_SIDE_CLEARANCE * easeOut(travelProgress);
+            sideClearance = -SECOND_HALF_SIDE_CLEARANCE * easeInOut(travelProgress);
           } else {
             // Na starcie finalu zachowaj pelny przeswit (bez skoku na srodek).
             // Wsun sie poprzecznie dopiero po zakonczeniu pionowania.
-            const moveIn = easeOut(THREE.MathUtils.clamp((finalizeProgress - 0.5) / 0.3, 0, 1));
+            const moveIn = easeInOut(THREE.MathUtils.clamp((finalizeProgress - 0.5) / 0.3, 0, 1));
             sideClearance = -SECOND_HALF_SIDE_CLEARANCE * (1 - moveIn);
           }
           // Lokalna os X modelu przeliczona na swiat dla dowolnego kierunku linii.

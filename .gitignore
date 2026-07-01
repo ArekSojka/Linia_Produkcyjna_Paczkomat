@@ -2,3 +2,4 @@ node_modules/
 debug.log
 vite-dev.*.log
 vite-personal.*.log
+.vercel
