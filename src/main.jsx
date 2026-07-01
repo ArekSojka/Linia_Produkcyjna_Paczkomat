@@ -731,13 +731,10 @@ function StageEditor({ stages, updateStage, addStage, removeStage, resetStages }
               />
             </label>
             <label>
-              Czas bazowy [s]
-              <input
-                type="number"
-                min="0"
-                step="0.5"
-                value={stage.duration}
-                onChange={(event) => updateStage(stage.id, { duration: event.target.value })}
+              Czas bazowy
+              <MinutesSecondsFields
+                totalSeconds={stage.duration}
+                onChange={(value) => updateStage(stage.id, { duration: value })}
               />
             </label>
             <label>
@@ -799,18 +796,60 @@ function Stopwatch({ elapsed, running, onToggle, onReset }) {
   );
 }
 
-function TravelTimeEditor({ stages, travelTimes, updateTravelTime }) {
+// Para pol minuty+sekundy dla jednej wartosci czasu (przechowywanej w sekundach
+// laczem). Wpisanie w dowolne z pol przelicza sie na laczna liczbe sekund.
+function MinutesSecondsFields({ totalSeconds, onChange }) {
+  const safeTotal = Math.max(0, Number(totalSeconds) || 0);
+  const minutesPart = Math.floor(safeTotal / 60);
+  const secondsPart = Math.round((safeTotal - minutesPart * 60) * 10) / 10;
+
+  return (
+    <span className="time-inputs">
+      <input
+        type="number"
+        min="0"
+        step="1"
+        value={minutesPart}
+        title="minuty"
+        onChange={(event) => {
+          const mins = Math.max(0, Number(event.target.value) || 0);
+          onChange(mins * 60 + secondsPart);
+        }}
+      />
+      <span className="unit">min</span>
+      <input
+        type="number"
+        min="0"
+        step="0.1"
+        value={secondsPart}
+        title="sekundy"
+        onChange={(event) => {
+          const secs = Math.max(0, Number(event.target.value) || 0);
+          onChange(minutesPart * 60 + secs);
+        }}
+      />
+      <span className="unit">s</span>
+    </span>
+  );
+}
+
+function TravelTimeEditor({
+  stages,
+  travelTimes,
+  updateTravelTime,
+  offlinePalletTravel,
+  updateOfflinePalletTravel,
+}) {
   if (stages.length < 2) return null;
 
   // Pokazujemy tylko przejazdy ROLOTOKU (miedzy stacjami na tasmie). Dojazd
-  // palety na etap offline (poza linia) jest osobny — TUNE.offline.palletTravel.
+  // palety na etap offline (poza linia) jest osobny (TUNE.offline.palletTravel).
   const conveyorTravelCount = getConveyorFinalIndex(stages.length);
   const offline = isOfflineEnabled(stages.length);
 
   return (
     <div className="travel-editor">
       <div className="mini-heading">
-        <span>Tasmociag</span>
         <strong>Czas przejazdu miedzy etapami</strong>
       </div>
       {stages.slice(0, conveyorTravelCount).map((stage, index) => {
@@ -821,21 +860,28 @@ function TravelTimeEditor({ stages, travelTimes, updateTravelTime }) {
             <span>
               {stage.name || `Etap ${index + 1}`} do {nextStage.name || `Etap ${index + 2}`}
             </span>
-            <input
-              type="number"
-              min="0.1"
-              step="0.1"
-              value={travelTimes[index] ?? 1}
-              onChange={(event) => updateTravelTime(index, event.target.value)}
+            <MinutesSecondsFields
+              totalSeconds={travelTimes[index] ?? 1}
+              onChange={(value) => updateTravelTime(index, value)}
             />
           </label>
         );
       })}
       {offline && (
-        <div style={{ fontSize: 11, color: 'var(--muted, #94a3b8)', marginTop: 4, lineHeight: 1.4 }}>
-          Dojazd palety na stanowisko offline (etap {stages.length - 1}) ustawiasz w
-          {' '}<code>TUNE.offline.palletTravel</code> — nie blokuje rolotoku.
-        </div>
+        <>
+          <label className="travel-row">
+            <span>
+              Dojazd palety na stanowisko offline (etap {stages.length - 1})
+            </span>
+            <MinutesSecondsFields
+              totalSeconds={offlinePalletTravel ?? 6}
+              onChange={updateOfflinePalletTravel}
+            />
+          </label>
+          <div style={{ fontSize: 11, color: 'var(--muted, #94a3b8)', marginTop: -2, lineHeight: 1.4 }}>
+            Nie blokuje rolotoku.
+          </div>
+        </>
       )}
     </div>
   );
@@ -869,14 +915,21 @@ function WorkersEditor({
         </label>
         <label>
           Wartosc
-          <input
-            type="number"
-            min="0"
-            max={workerEffect.mode === 'percent' ? 95 : undefined}
-            step={workerEffect.mode === 'percent' ? 1 : 0.5}
-            value={workerEffect.value}
-            onChange={(event) => updateWorkerEffect({ value: event.target.value })}
-          />
+          {workerEffect.mode === 'percent' ? (
+            <input
+              type="number"
+              min="0"
+              max={95}
+              step={1}
+              value={workerEffect.value}
+              onChange={(event) => updateWorkerEffect({ value: event.target.value })}
+            />
+          ) : (
+            <MinutesSecondsFields
+              totalSeconds={workerEffect.value}
+              onChange={(value) => updateWorkerEffect({ value })}
+            />
+          )}
         </label>
       </div>
       {stages.map((stage, index) => (
@@ -910,6 +963,8 @@ function Metrics({
   launchInterval,
   travelTimes,
   updateTravelTime,
+  offlinePalletTravel,
+  updateOfflinePalletTravel,
   workersPerStation,
   updateWorkerCount,
   workerEffect,
@@ -1018,7 +1073,13 @@ function Metrics({
         ))}
       </div>
 
-      <TravelTimeEditor stages={stages} travelTimes={travelTimes} updateTravelTime={updateTravelTime} />
+      <TravelTimeEditor
+        stages={stages}
+        travelTimes={travelTimes}
+        updateTravelTime={updateTravelTime}
+        offlinePalletTravel={offlinePalletTravel}
+        updateOfflinePalletTravel={updateOfflinePalletTravel}
+      />
 
       <WorkersEditor
         stages={stages}
@@ -2679,6 +2740,14 @@ function updateTwoPartLockerModel(
   const lead = fractionsForUnit(leadUnit);
   const trail = fractionsForUnit(trailUnit);
   const modFr = (moduleIndex) => (moduleIndex === 1 ? trail : lead);
+  // Modul 1 (druga polowa/trail) ma fizycznie odwrocone koryto wzgledem modulu 0
+  // (lustrzane ulozenie), wiec montaz zamkow/polek/skrytek w tej samej kolejnosci
+  // co modul 0 szedlby od dolu zamiast od gory. Odwracamy kolejnosc TYLKO dla
+  // modulu 1, zeby obie polowy budowaly sie wizualnie w tym samym kierunku.
+  const moduleLocalIndex = (moduleIndex, flatIndex) => {
+    const raw = flatIndex - moduleIndex * LOCKS_PER_MODULE;
+    return moduleIndex === 1 ? LOCKS_PER_MODULE - 1 - raw : raw;
+  };
   // Wartosci "wspolne" (podstawa) ida za liderem.
   const locksBuild = lead.locks;
   const structureBuild = lead.structure;
@@ -2699,7 +2768,7 @@ function updateTwoPartLockerModel(
   parts.locks.forEach((lock, index) => {
     const m = index < LOCKS_PER_MODULE ? 0 : 1;
     const fr = modFr(m);
-    const localIndex = index - m * LOCKS_PER_MODULE;
+    const localIndex = moduleLocalIndex(m, index);
     const lockTimeline = Math.max(0, (fr.locks - 0.14) / 0.86) * LOCKS_PER_MODULE;
     const rawProgress = THREE.MathUtils.clamp(lockTimeline - localIndex, 0, 1);
     const progress = smooth(rawProgress);
@@ -2793,7 +2862,7 @@ function updateTwoPartLockerModel(
   parts.shelves.forEach((shelf, index) => {
     const m = index < LOCKS_PER_MODULE ? 0 : 1;
     const fr = modFr(m);
-    const localIndex = index - m * LOCKS_PER_MODULE;
+    const localIndex = moduleLocalIndex(m, index);
     const shelfTimeline = Math.max(0, (fr.structure - 0.36) / 0.46) * LOCKS_PER_MODULE;
     const rawProgress = THREE.MathUtils.clamp(shelfTimeline - localIndex, 0, 1);
     const progress = smooth(rawProgress);
@@ -2828,7 +2897,7 @@ function updateTwoPartLockerModel(
   parts.lockerCells.forEach((cell, index) => {
     const m = index < LOCKS_PER_MODULE ? 0 : 1;
     const fr = modFr(m);
-    const localIndex = index - m * LOCKS_PER_MODULE;
+    const localIndex = moduleLocalIndex(m, index);
     const rawProgress = THREE.MathUtils.clamp(fr.lockers * LOCKS_PER_MODULE - localIndex, 0, 1);
     const progress = smooth(rawProgress);
     cell.visible = progress > 0.01;
@@ -4000,7 +4069,7 @@ function ThreeProductionScene({
             : MODEL_LINE_Y + conveyorLift + Math.sin(time * 2 + poseUnit.number) * 0.018;
         }
 
-        if (halfMode === 'trail' && !usePalletLanding && (isApproachingStandingStage || isStandingStage)) {
+        if (halfMode === 'trail' && (isApproachingStandingStage || isStandingStage)) {
           let sideClearance;
           if (isApproachingStandingStage) {
             // Zjedz na boczny tor JESZCZE W CZASIE DOJAZDU. Na koncu przejazdu
@@ -4018,8 +4087,12 @@ function ThreeProductionScene({
             sideClearance = -SECOND_HALF_SIDE_CLEARANCE * (1 - moveIn);
           }
           // Lokalna os X modelu przeliczona na swiat dla dowolnego kierunku linii.
-          model.position.x += Math.cos(pose.angle) * sideClearance;
-          model.position.z -= Math.sin(pose.angle) * sideClearance;
+          // Uzywamy KATA MODELU (palletLandingAngle = pose.angle poza paleta, albo
+          // kat konca linii, gdy jedziemy na paleta) - inaczej ten przeswit znikal
+          // skokowo w momencie przelaczenia na tryb paleta (usePalletLanding),
+          // bo model.position bylo juz ustawione bez tej korekty.
+          model.position.x += Math.cos(palletLandingAngle) * sideClearance;
+          model.position.z -= Math.sin(palletLandingAngle) * sideClearance;
         }
 
         if (!usePalletLanding) {
@@ -4558,6 +4631,9 @@ function App() {
   const speedRef = useRef(1);
   speedRef.current = speedMultiplier;
   const [travelTimes, setTravelTimes] = useState(() => getDefaultTravelTimes(baseStages.length));
+  const [offlinePalletTravel, setOfflinePalletTravel] = useState(
+    () => TUNE.offline?.palletTravel ?? 6,
+  );
   const [workersPerStation, setWorkersPerStation] = useState(() => baseStages.map(() => 1));
   const [workerEffect, setWorkerEffect] = useState(DEFAULT_WORKER_EFFECT);
   const [stopwatchRunning, setStopwatchRunning] = useState(false);
@@ -4624,7 +4700,13 @@ function App() {
       console.error('Wykryto konflikt rezerwacji harmonogramu.', schedule.reservationConflicts);
     }
     return schedule;
-  }, [measuredPartLength, normalizedStages, normalizedTravelTimes, productionCount]);
+  }, [
+    measuredPartLength,
+    normalizedStages,
+    normalizedTravelTimes,
+    productionCount,
+    offlinePalletTravel,
+  ]);
   const cycleTime = productionSchedule.soloCycleTime;
   const launchInterval = productionSchedule.launchInterval;
   const totalTime = productionSchedule.totalTime;
@@ -4735,6 +4817,15 @@ function App() {
     });
   };
 
+  // TUNE jest globalnym obiektem czytanym bezposrednio przez harmonogram
+  // (buildProductionSchedule), wiec mutujemy go tak samo jak inne "live tuning"
+  // wartosci - stan Reacta sluzy tylko do wymuszenia przeliczenia (useMemo deps).
+  const updateOfflinePalletTravel = (value) => {
+    const next = Math.max(0.1, clampNumber(value, TUNE.offline?.palletTravel ?? 6));
+    if (TUNE.offline) TUNE.offline.palletTravel = next;
+    setOfflinePalletTravel(next);
+  };
+
   const updateWorkerCount = (index, value) => {
     setWorkersPerStation((current) => {
       const next = normalizedStages.map((_, i) => current[i] ?? 1);
@@ -4808,6 +4899,8 @@ function App() {
         launchInterval={launchInterval}
         travelTimes={normalizedTravelTimes}
         updateTravelTime={updateTravelTime}
+        offlinePalletTravel={offlinePalletTravel}
+        updateOfflinePalletTravel={updateOfflinePalletTravel}
         workersPerStation={workersPerStation}
         updateWorkerCount={updateWorkerCount}
         workerEffect={normalizedWorkerEffect}

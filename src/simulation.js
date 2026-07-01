@@ -63,9 +63,9 @@ export const TUNE = {
   lockX: [0, 0],
   // Wysokosc dachu liczona od szczytu kolumny. Zwieksz = wyzej (gdy wnika),
   // zmniejsz = nizej (gdy lewituje).
-  roofYOffset: -0.08,
+  roofYOffset: -5.2,
   // Wysokosc daszka - ma byc lekko POD dachem (czyli mniej niz roofYOffset).
-  canopyYOffset: -0.16,
+  canopyYOffset: -5.3,
   // PELNY obrot dachu/daszka [rotX, rotY, rotZ] w radianach. Model ma juz
   // gotowy skos - rotY = Math.PI obraca go na wlasciwa strone (okap na przod).
   // Gdyby skos byl po zlej stronie, daj rotY: 0. Obrot robiony w miejscu.
@@ -464,8 +464,19 @@ export const buildProductionSchedule = (
   const partMinimumGap = Math.max(measuredPartLength, 0.1)
     + Math.max(TUNE.partSafetyGap ?? 0, 0);
   const stationSpacing = Math.max(TUNE.stationSpacing ?? 7.6, partMinimumGap + 0.01);
-  const getClearanceDuration = (travelDuration) => {
-    const distanceRatio = Math.min(Math.max(partMinimumGap / stationSpacing, 0), 0.98);
+  // Rzeczywiste odleglosci miedzy kolejnymi stacjami NA LINII (nie nominalny
+  // TUNE.stationSpacing!) - roznia sie od niego przez zageszczenie wczesnych
+  // etapow (tightEarly) i bufor (bufferSegment). Uzywane do policzenia, kiedy
+  // odjezdzajaca czesc FIZYCZNIE oddala sie od stacji o partMinimumGap - inaczej
+  // (np. przy skroconym tightEarly) stacja "zwalnia sie" na papierze zanim
+  // czesc naprawde zjedzie, i kolejna wjezdza prosto w nia (nakladanie sie).
+  const linePoints = buildLinePoints(stageCount);
+  const segmentDistances = linePoints.slice(0, -1).map(
+    (point, index) => point.distanceTo(linePoints[index + 1]),
+  );
+  const getClearanceDuration = (travelDuration, stageIndex) => {
+    const distance = Math.max(segmentDistances[stageIndex] ?? stationSpacing, partMinimumGap + 0.01);
+    const distanceRatio = Math.min(Math.max(partMinimumGap / distance, 0), 0.98);
     // Odwrotnosc easing: 0.5 - cos(progress * PI) / 2.
     const progress = Math.acos(1 - 2 * distanceRatio) / Math.PI;
     return travelDuration * progress;
@@ -476,12 +487,18 @@ export const buildProductionSchedule = (
 
   const scheduleHalf = ({ number, role, desiredStart, finalEarliest }) => {
     const segments = [];
-    // Nie wpuszczamy kolejnej polowy na odcinek wejsciowy, jezeli nie bedzie
-    // mogla zwolnic go przy stacji 0. Eliminuje to kolejke wewnatrz modeli.
+    // Nie wpuszczamy kolejnej polowy na odcinek wejsciowy, dopoki poprzednia
+    // NIE ZDAZYLA JUZ FIZYCZNIE oddalic sie od stacji 0 (stationFreeAt[0]).
+    // UWAGA: entry NIE zaczyna sie wczesniej "o ENTRY_TRAVEL_SECONDS" - taka
+    // wersja pozwalala nowej czesci zaczac dojazd, zanim poprzednia naprawde
+    // zwolnila miejsce, i obie animacje (dojazd + odjazd) nakladaly sie w
+    // czasie, przejezdzajac przez siebie na styku stacji 0/1 (widoczne
+    // "wjezdzanie" nowego koryta w stare). Start dopiero PO stationFreeAt[0]
+    // gwarantuje pelny odstep przez caly czas trwania obu animacji.
     const entryStart = Math.max(
       desiredStart,
       entryFreeAt,
-      (stationFreeAt[0] ?? 0) - ENTRY_TRAVEL_SECONDS,
+      stationFreeAt[0] ?? 0,
       0,
     );
     let arrivalAtStage = entryStart + ENTRY_TRAVEL_SECONDS;
@@ -559,7 +576,7 @@ export const buildProductionSchedule = (
 
       // Stacja jest wolna dopiero, gdy srodek wyjezdzajacej polowy oddali sie o
       // jej pelna dlugosc + margines. Zapobiega zetknieciu na granicy stacji.
-      stationFreeAt[stageIndex] = travelStart + getClearanceDuration(travelDuration);
+      stationFreeAt[stageIndex] = travelStart + getClearanceDuration(travelDuration, stageIndex);
       segmentFreeAt[stageIndex] = travelEnd;
       arrivalAtStage = travelEnd;
       finishTime = travelEnd;
