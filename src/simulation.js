@@ -293,7 +293,8 @@ export const TUNE = {
     labelHeight: 1.55, // wysokosc unoszacej etykiety nad podloga
     // --- powierzchnia hali ---
     floorWidth: 46,    // szerokosc podlogi hali w poprzek linii (X)
-    floorDepthPad: 58, // zapas dlugosci podlogi wzdluz linii (Z)
+    floorDepthPad: 86, // zapas dlugosci podlogi wzdluz linii (Z) - powiekszony, zeby
+                        // zmiescic odsuniety bufor podstaw (patrz bufferPx nizej)
     floorCenterX: -6,  // przesuniecie srodka podlogi (plan ma wiecej stref na dole)
     // --- mapowanie PLANU hali na swiat (strefy peryferyjne) ---
     // Kazdy sektor ma w danych pozycje z planu (px,py). Te liczby przeliczaja
@@ -304,7 +305,10 @@ export const TUNE = {
     planXScale: 0.07,   // w poprzek = wzdluz (jednolita skala -> ksztalty jak w planie)
     planGap: 1.5,       // staly odstep stref od linii montazowej (cofa je od stanowisk)
     // --- bufor podstaw (siatka miejsc na palety) ---
-    bufferPx: 1400,     // pozycja bufora w planie (px) - za koniec rolotoku, poza Blendy/Dachy
+    // bufferPx odsuniety z 1400 na 1530 - przy 1400 bufor nachodzil na
+    // Stanowisko 2 (etap offline), patrz TUNE.offline.stations. Podloga
+    // (floorDepthPad wyzej) powiekszona, zeby bufor nadal miescil sie w calosci.
+    bufferPx: 1530,     // pozycja bufora w planie (px) - za koniec rolotoku, poza Blendy/Dachy
     bufferPy: 85,       // pozycja bufora w planie (py)
     bufferCols: 4,      // liczba miejsc wzdluz
     bufferRows: 2,      // liczba miejsc w poprzek

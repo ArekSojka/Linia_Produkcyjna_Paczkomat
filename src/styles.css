@@ -299,6 +299,14 @@ select:focus {
   gap: 6px 8px;
 }
 
+.offline-worker-split {
+  display: grid;
+  gap: 6px;
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 2px solid #e2e8f0;
+}
+
 .worker-row > span {
   min-width: 0;
   color: #64748b;

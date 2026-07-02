@@ -607,106 +607,6 @@ function StageIcon({ icon, className }) {
   return <Icon className={className} aria-hidden="true" />;
 }
 
-function LockerUnit({ stages, currentIndex, currentStage, progress }) {
-  const hasFrame = currentIndex >= 0;
-  const hasDoors = currentIndex >= 1;
-  const hasLockers = currentIndex >= 2;
-  const hasElectronics = currentIndex >= 3;
-  const isTesting = currentIndex >= 4;
-
-  return (
-    <motion.div className="locker-unit" layout>
-      <motion.div
-        className="locker-frame"
-        initial={false}
-        animate={{
-          opacity: hasFrame ? 1 : 0.45,
-          borderColor: hasFrame ? stages[0]?.color ?? '#2563eb' : '#9ca3af',
-        }}
-        transition={{ duration: 0.25 }}
-      >
-        <div className="locker-top" />
-        <div className="locker-body">
-          <motion.div
-            className="door-panel left-door"
-            initial={false}
-            animate={{
-              opacity: hasDoors ? 1 : 0,
-              rotateY: currentStage?.icon === 'door' ? [34, 0, 8, 0] : 0,
-            }}
-            transition={{
-              duration: Math.max(currentStage?.duration ?? 1, 1),
-              repeat: currentStage?.icon === 'door' ? Infinity : 0,
-            }}
-          />
-          <motion.div
-            className="door-panel right-door"
-            initial={false}
-            animate={{
-              opacity: hasDoors ? 1 : 0,
-              rotateY: currentStage?.icon === 'door' ? [-34, 0, -8, 0] : 0,
-            }}
-            transition={{
-              duration: Math.max(currentStage?.duration ?? 1, 1),
-              repeat: currentStage?.icon === 'door' ? Infinity : 0,
-            }}
-          />
-          <div className="locker-grid">
-            {Array.from({ length: 12 }).map((_, index) => (
-              <motion.span
-                key={index}
-                className="locker-cell"
-                initial={false}
-                animate={{
-                  opacity: hasLockers ? 1 : 0,
-                  scale: hasLockers ? 1 : 0.6,
-                }}
-                transition={{ delay: hasLockers ? index * 0.035 : 0, duration: 0.25 }}
-              />
-            ))}
-          </div>
-          <motion.div
-            className="electronics-panel"
-            initial={false}
-            animate={{
-              opacity: hasElectronics ? 1 : 0,
-              x: hasElectronics ? 0 : 18,
-              boxShadow:
-                currentStage?.icon === 'electronics'
-                  ? ['0 0 0 rgba(220,38,38,0)', '0 0 22px rgba(220,38,38,0.42)', '0 0 0 rgba(220,38,38,0)']
-                  : '0 0 0 rgba(220,38,38,0)',
-            }}
-            transition={{
-              duration: currentStage?.icon === 'electronics' ? 1.2 : 0.25,
-              repeat: currentStage?.icon === 'electronics' ? Infinity : 0,
-            }}
-          >
-            <span />
-            <span />
-            <span />
-          </motion.div>
-          <motion.div
-            className="quality-scan"
-            initial={false}
-            animate={{
-              opacity: isTesting ? 1 : 0,
-              y: isTesting ? ['-12%', '96%'] : '-12%',
-            }}
-            transition={{
-              duration: Math.max((currentStage?.duration ?? 2) / 2, 1),
-              repeat: isTesting ? Infinity : 0,
-              ease: 'linear',
-            }}
-          />
-        </div>
-      </motion.div>
-      <div className="assembly-progress">
-        <motion.span style={{ width: `${progress}%`, backgroundColor: currentStage?.color ?? '#64748b' }} />
-      </div>
-    </motion.div>
-  );
-}
-
 function StageEditor({ stages, updateStage, addStage, removeStage, resetStages }) {
   return (
     <section className="panel section-panel">
@@ -895,10 +795,15 @@ function WorkersEditor({
   stages,
   workersPerStation,
   updateWorkerCount,
+  offlineStationWorkers,
+  updateOfflineStationWorkerCount,
   workerEffect,
   updateWorkerEffect,
 }) {
   if (!stages.length) return null;
+
+  const offlineStageIdx = getOfflineStageIndex(stages.length);
+  const offlineServerCount = isOfflineEnabled(stages.length) ? getOfflineServerCount() : 0;
 
   return (
     <div className="travel-editor">
@@ -937,22 +842,40 @@ function WorkersEditor({
         </label>
       </div>
       {stages.map((stage, index) => (
-        <label className="worker-row" key={stage.id}>
-          <span>{stage.name || `Etap ${index}`}</span>
-          <input
-            type="number"
-            min="1"
-            step="1"
-            value={workersPerStation[index] ?? 1}
-            onChange={(event) => updateWorkerCount(index, event.target.value)}
-          />
-          <strong title={`Bazowo: ${formatTime(stage.baseDuration ?? stage.duration)}`}>
-            {formatTime(stage.duration)}
-          </strong>
-          <small>
-            {getWorkerImprovementLabel(stage.baseDuration ?? stage.duration, stage.duration)}
-          </small>
-        </label>
+        <React.Fragment key={stage.id}>
+          <label className="worker-row">
+            <span>{stage.name || `Etap ${index}`}</span>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={workersPerStation[index] ?? 1}
+              onChange={(event) => updateWorkerCount(index, event.target.value)}
+            />
+            <strong title={`Bazowo: ${formatTime(stage.baseDuration ?? stage.duration)}`}>
+              {formatTime(stage.duration)}
+            </strong>
+            <small>
+              {getWorkerImprovementLabel(stage.baseDuration ?? stage.duration, stage.duration)}
+            </small>
+          </label>
+          {index === offlineStageIdx && offlineServerCount > 0 && (
+            <div className="offline-worker-split">
+              {Array.from({ length: offlineServerCount }, (_, stationIndex) => (
+                <label className="worker-row" key={`offline-station-${stationIndex}`}>
+                  <span>↳ Stanowisko {stationIndex + 1}</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={offlineStationWorkers?.[stationIndex] ?? 1}
+                    onChange={(event) => updateOfflineStationWorkerCount(stationIndex, event.target.value)}
+                  />
+                </label>
+              ))}
+            </div>
+          )}
+        </React.Fragment>
       ))}
     </div>
   );
@@ -971,6 +894,8 @@ function Metrics({
   updateOfflinePalletTravel,
   workersPerStation,
   updateWorkerCount,
+  offlineStationWorkers,
+  updateOfflineStationWorkerCount,
   workerEffect,
   updateWorkerEffect,
   throughputPerHour,
@@ -1089,6 +1014,8 @@ function Metrics({
         stages={stages}
         workersPerStation={workersPerStation}
         updateWorkerCount={updateWorkerCount}
+        offlineStationWorkers={offlineStationWorkers}
+        updateOfflineStationWorkerCount={updateOfflineStationWorkerCount}
         workerEffect={workerEffect}
         updateWorkerEffect={updateWorkerEffect}
       />
@@ -1467,375 +1394,182 @@ function buildPeripheralSectors(group, routePoints, s) {
   buildBufferGrid(group, b.x, b.z, s);
 }
 
-function createLockerModel() {
-  const group = new THREE.Group();
-  group.scale.setScalar(0.76);
+// Buduje jedna sylwetke pracownika (pozycjonowanie i wpis do stationWorkers
+// robi wywolujacy). stageColor koloruje helmet/koncowke narzedzia, skinSeed
+// urozmaica odcien skory, showTool pokazuje/chowa trzymane narzedzie.
+function createWorkerFigure(stageColor, skinSeed, showTool) {
+  const skinColors = ['#d6a47a', '#9a6848', '#e0b48f', '#704832'];
+  const worker = new THREE.Group();
+  worker.visible = SHOW_WORKERS;
+  worker.position.y = -0.095;
+  worker.scale.setScalar(1.12);
 
-  const horizontalAssembly = new THREE.Group();
-  horizontalAssembly.name = 'horizontalAssemblyLiftPivot';
-  horizontalAssembly.position.z = -ASSEMBLY_HALF_LENGTH;
-  const horizontalContent = new THREE.Group();
-  horizontalContent.position.z = ASSEMBLY_HALF_LENGTH;
-  horizontalAssembly.add(horizontalContent);
-  group.add(horizontalAssembly);
-
-  const mountingTrough = new THREE.Group();
-  mountingTrough.name = 'horizontalLockTroughAssembly';
-  mountingTrough.position.y = -0.47;
-  mountingTrough.rotation.x = -Math.PI / 2;
-  horizontalContent.add(mountingTrough);
-
-  const mountingTroughParts = [];
-  const troughSheet = makeBox(0.92, ASSEMBLY_LENGTH - 0.2, 0.1, '#cbd5e1', 'lockTrough');
-  troughSheet.position.set(0, 0, 0.48);
-  mountingTroughParts.push(troughSheet);
-  mountingTrough.add(troughSheet);
-
-  [-0.5, 0.5].forEach((x) => {
-    const lip = makeBox(0.12, ASSEMBLY_LENGTH - 0.12, 0.38, '#94a3b8', 'lockTroughLip');
-    lip.position.set(x, 0, 0.34);
-    mountingTroughParts.push(lip);
-    mountingTrough.add(lip);
-  });
-
-  const lockHoles = [];
-  const locks = [];
-  for (let index = 0; index < LOCK_COUNT; index += 1) {
-    const y = -2 + index * ASSEMBLY_ITEM_SPACING;
-    const hole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.075, 0.075, 0.025, 20),
-      makeMaterial('#334155', 0.7, 0.16),
-    );
-    hole.rotation.x = Math.PI / 2;
-    hole.position.set(0, y, 0.545);
-    lockHoles.push(hole);
-    mountingTrough.add(hole);
-
-    const lock = new THREE.Group();
-    lock.name = `lock-${index + 1}`;
-    lock.position.set(0, y, 0.62);
-
-    const housing = makeBox(0.46, 0.15, 0.16, '#172033', 'lockHousing');
-    lock.add(housing);
-
-    const cylinder = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.055, 0.055, 0.2, 18),
-      makeMaterial('#facc15', 0.3, 0.68),
-    );
-    cylinder.rotation.x = Math.PI / 2;
-    cylinder.position.z = 0.1;
-    cylinder.castShadow = true;
-    lock.add(cylinder);
-
-    const bolt = makeBox(0.18, 0.045, 0.055, '#e2e8f0', 'lockBolt');
-    bolt.position.set(0.28, 0, 0);
-    lock.add(bolt);
-
-    lock.userData.meshes = [housing, cylinder, bolt];
-    locks.push(lock);
-    mountingTrough.add(lock);
-  }
-
-  const sideWalls = [];
-  const backWalls = [];
-  [-2.1, 2.1].forEach((x, index) => {
-    const wall = makeBox(0.22, 1.12, ASSEMBLY_LENGTH, '#111318', 'horizontalSideWall');
-    wall.position.set(x, 0, 0);
-    wall.userData.targetX = x;
-    wall.userData.targetY = 0;
-    wall.userData.order = index;
-    sideWalls.push(wall);
-    horizontalContent.add(wall);
-  });
-
-  const shelves = [];
-  for (let index = 0; index < SHELF_COUNT; index += 1) {
-    const shelf = makeBox(4.02, 1.02, 0.1, '#dbe4ec', 'horizontalShelf');
-    shelf.position.set(0, 0, -2 + index * ASSEMBLY_ITEM_SPACING);
-    shelf.userData.targetY = 0;
-    shelves.push(shelf);
-    horizontalContent.add(shelf);
-  }
-
-  const horizontalBack = makeBox(4.18, 0.1, ASSEMBLY_LENGTH - 0.08, '#15181d', 'horizontalBackPanel');
-  horizontalBack.position.set(0, -0.56, 0);
-  horizontalBack.userData.targetY = -0.56;
-  horizontalContent.add(horizontalBack);
-
-  const horizontalCells = [];
-  for (let index = 0; index < LOCKER_COUNT; index += 1) {
-    const row = Math.floor(index / 2);
-    const direction = index % 2 === 0 ? -1 : 1;
-    const z = -2 + row * ASSEMBLY_ITEM_SPACING;
-    const cell = new THREE.Group();
-    cell.name = `horizontalCell-${index + 1}`;
-    cell.position.set(direction * 1.04, 0.56, z);
-    cell.userData.targetX = direction * 1.04;
-    cell.userData.targetY = 0.56;
-    cell.userData.meshes = [];
-
-    [
-      [1.94, 0.05, 0.03, 0, 0, -0.17],
-      [1.94, 0.05, 0.03, 0, 0, 0.17],
-      [0.035, 0.05, 0.34, -0.97, 0, 0],
-      [0.035, 0.05, 0.34, 0.97, 0, 0],
-    ].forEach(([width, height, depth, x, y, localZ]) => {
-      const edge = makeBox(width, height, depth, '#475569', 'horizontalCellEdge');
-      edge.position.set(x, y, localZ);
-      cell.userData.meshes.push(edge);
-      cell.add(edge);
-    });
-
-    const doorFace = makeBox(1.86, 0.075, 0.29, '#f8fafc', 'horizontalLockerDoor');
-    doorFace.position.y = 0.025;
-    cell.userData.meshes.push(doorFace);
-    cell.add(doorFace);
-
-    horizontalCells.push(cell);
-    horizontalContent.add(cell);
-  }
-
-  const centerLockerTrim = makeBox(0.18, 0.1, 4.34, '#475569', 'centerLockerTrim');
-  centerLockerTrim.position.set(0, 0.61, 0);
-  centerLockerTrim.userData.targetY = 0.61;
-  horizontalContent.add(centerLockerTrim);
-
-  const liftingBase = makeBox(4.72, 0.34, 1.34, '#0d1014', 'liftingBase');
-  liftingBase.position.set(0, -0.12, -ASSEMBLY_HALF_LENGTH);
-  liftingBase.userData.targetZ = -ASSEMBLY_HALF_LENGTH;
-  group.add(liftingBase);
-
-  const liftingBaseFront = makeBox(4.48, 0.3, 0.14, '#090b0e', 'liftingBaseFront');
-  liftingBaseFront.position.set(0, 0.09, -ASSEMBLY_HALF_LENGTH - 0.6);
-  liftingBaseFront.userData.targetZ = -ASSEMBLY_HALF_LENGTH - 0.6;
-  group.add(liftingBaseFront);
-
-  const liftingRoof = makeBox(4.58, 0.22, 0.58, '#111827', 'liftingRoof');
-  liftingRoof.position.set(0, 0.56, ASSEMBLY_HALF_LENGTH + 0.08);
-  liftingRoof.userData.targetY = 0.56;
-  liftingRoof.userData.targetZ = ASSEMBLY_HALF_LENGTH + 0.08;
-  horizontalContent.add(liftingRoof);
-
-  const liftingRoofPanel = makeBox(4.66, 1.34, 0.16, '#273746', 'liftingRoofPanel');
-  liftingRoofPanel.position.set(0, -0.04, ASSEMBLY_HALF_LENGTH + 0.02);
-  liftingRoofPanel.userData.targetY = -0.04;
-  liftingRoofPanel.userData.targetZ = ASSEMBLY_HALF_LENGTH + 0.02;
-  horizontalContent.add(liftingRoofPanel);
-
-  const frameBeams = [];
-  const makeBeam = (width, height, depth, x, y, z) => {
-    const beam = makeBox(width, height, depth, '#111827', 'frameBeam');
-    beam.position.set(x, y, z);
-    frameBeams.push(beam);
-    group.add(beam);
-    return beam;
-  };
-
-  makeBeam(4.08, 0.18, 0.2, 0, 0.12, 0.58);
-  makeBeam(4.08, 0.2, 0.2, 0, 2.92, 0.58);
-  makeBeam(0.2, 2.95, 0.2, -2.04, 1.52, 0.58);
-  makeBeam(0.2, 2.95, 0.2, 2.04, 1.52, 0.58);
-  makeBeam(0.11, 2.78, 0.16, -1.02, 1.5, 0.62);
-  makeBeam(0.11, 2.78, 0.16, 0, 1.5, 0.62);
-  makeBeam(0.11, 2.78, 0.16, 1.02, 1.5, 0.62);
-
-  const body = makeBox(4.5, 2.72, 0.82, '#f8fafc', 'bodyPanel');
-  body.position.set(0, 1.48, 0.2);
-  group.add(body);
-
-  const side = makeBox(0.18, 2.82, 0.88, '#ffffff', 'sidePanel');
-  side.position.set(2.38, 1.48, 0.08);
-  group.add(side);
-
-  const back = makeBox(4.8, 2.96, 0.1, '#e5e7eb', 'backPanel');
-  back.position.set(0, 1.48, -0.39);
-  group.add(back);
-
-  const base = makeBox(4.9, 0.28, 1.02, '#0f2930', 'base');
-  base.position.set(0, 0.05, 0.06);
-  group.add(base);
-
-  const cap = makeBox(4.96, 0.28, 1.04, '#030712', 'cap');
-  cap.position.set(0, 3.08, 0.06);
-  group.add(cap);
-
-  const topModules = [];
-  for (let index = 0; index < 8; index += 1) {
-    const module = makeBox(0.48, 0.18, 0.12, '#020617', 'topModule');
-    module.position.set(-2.06 + index * 0.49, 3.24, 0.6);
-    topModules.push(module);
-    group.add(module);
-  }
-
-  const feet = [];
-  [-2.09, -0.69, 0.69, 2.09].forEach((x) => {
-    const leg = makeBox(0.08, 0.26, 0.08, '#111827', 'leg');
-    leg.position.set(x, -0.16, 0.18);
-    feet.push(leg);
-    group.add(leg);
-
-    const foot = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.13, 0.17, 0.05, 18),
-      makeMaterial('#020617', 0.46, 0.35),
-    );
-    foot.position.set(x, -0.31, 0.18);
-    foot.castShadow = true;
-    feet.push(foot);
-    group.add(foot);
-  });
-
-  const doorPanels = [];
-  for (let col = 0; col < 8; col += 1) {
-    const panel = makeBox(0.43, 2.35, 0.055, '#ffffff', 'doorPanel');
-    panel.position.set(-1.69 + col * 0.48, 1.56, 0.64);
-    doorPanels.push(panel);
-    group.add(panel);
-  }
-
-  const cells = [];
-  for (let row = 0; row < 7; row += 1) {
-    for (let col = 0; col < 8; col += 1) {
-      const width = col === 0 || col === 7 ? 0.43 : 0.41;
-      const cell = makeBox(width, 0.265, 0.05, '#f9fafb', 'lockerCell');
-      cell.position.set(-1.69 + col * 0.48, 0.48 + row * 0.32, 0.7);
-      cells.push(cell);
-      group.add(cell);
-    }
-  }
-
-  const panel = makeBox(0.48, 0.92, 0.16, '#050505', 'electronicsPanel');
-  panel.position.set(0, 1.64, 0.8);
-  group.add(panel);
-
-  const screen = makeBox(0.29, 0.31, 0.04, '#1f2937', 'panelLight');
-  screen.position.set(0, 1.72, 0.9);
-  screen.rotation.x = -0.16;
-  group.add(screen);
-
-  const panelIndicators = [];
-  [-0.14, 0, 0.14].forEach((x, index) => {
-    const led = new THREE.Mesh(
-      new THREE.SphereGeometry(0.035, 14, 10),
-      new THREE.MeshStandardMaterial({
-        color: index === 1 ? '#facc15' : '#38bdf8',
-        emissive: index === 1 ? '#facc15' : '#38bdf8',
-        emissiveIntensity: 0,
-        roughness: 0.28,
-        metalness: 0.08,
-      }),
-    );
-    led.position.set(x, 1.3, 0.91);
-    led.castShadow = true;
-    panelIndicators.push(led);
-    group.add(led);
-  });
-
-  const brandLabel = makeTextPlane(1.38, 0.42, (ctx, canvas) => {
-    ctx.fillStyle = '#facc15';
-    ctx.beginPath();
-    ctx.arc(108, 96, 46, 0.38 * Math.PI, 1.64 * Math.PI);
-    ctx.lineWidth = 16;
-    ctx.strokeStyle = '#facc15';
-    ctx.stroke();
-    ctx.fillStyle = '#27272a';
-    ctx.font = 'bold 68px Arial';
-    ctx.fillText('PostBox', 155, 105);
-    ctx.font = 'bold 24px Arial';
-    ctx.fillText('out of the box', 190, 140);
-  });
-  brandLabel.position.set(1.06, 2.48, 0.735);
-  group.add(brandLabel);
-
-  const bottomLabel = makeTextPlane(1.58, 0.36, (ctx) => {
-    ctx.fillStyle = '#3f3f46';
-    ctx.font = 'bold 62px Arial';
-    ctx.fillText('Paczkomat', 26, 102);
-    ctx.fillStyle = '#facc15';
-    ctx.font = 'bold 82px Arial';
-    ctx.fillText('24h', 350, 110);
-  });
-  bottomLabel.position.set(0.95, 0.56, 0.735);
-  group.add(bottomLabel);
-
-  const scan = makeBox(3.58, 0.05, 0.05, '#8b5cf6', 'qualityScan');
-  scan.position.set(0, 1.2, 0.86);
-  group.add(scan);
-
-  const warningLight = new THREE.Group();
-  warningLight.name = 'blockingWarning';
-  warningLight.position.set(0, 3.62, 0.72);
-
-  const warningPost = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.035, 0.035, 0.42, 14),
-    makeMaterial('#334155', 0.45, 0.28),
+  const hips = new THREE.Mesh(
+    new RoundedBoxGeometry(0.46, 0.24, 0.3, 3, 0.055),
+    makeMaterial('#1e293b', 0.76, 0.04),
   );
-  warningPost.position.y = -0.18;
-  warningPost.castShadow = true;
-  warningLight.add(warningPost);
+  hips.position.y = 0.78;
+  hips.castShadow = true;
+  hips.name = 'workerHips';
+  worker.add(hips);
 
-  const warningBulb = new THREE.Mesh(
-    new THREE.SphereGeometry(0.16, 24, 18),
-    new THREE.MeshStandardMaterial({
-      color: '#dc2626',
-      emissive: '#dc2626',
-      emissiveIntensity: 1.8,
-      roughness: 0.35,
-      metalness: 0.08,
-    }),
+  const legs = [];
+  [-0.14, 0.14].forEach((x) => {
+    const legPivot = new THREE.Group();
+    legPivot.position.set(x, 0.72, 0);
+    const leg = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.085, 0.095, 0.62, 14),
+      makeMaterial('#25344a', 0.78, 0.04),
+    );
+    leg.position.y = -0.29;
+    leg.castShadow = true;
+    legPivot.add(leg);
+    const boot = new THREE.Mesh(
+      new RoundedBoxGeometry(0.2, 0.12, 0.34, 3, 0.035),
+      makeMaterial('#111827', 0.68, 0.12),
+    );
+    boot.position.set(0, -0.62, 0.08);
+    boot.castShadow = true;
+    boot.name = 'workerBoot';
+    legPivot.add(boot);
+    legs.push(legPivot);
+    worker.add(legPivot);
+  });
+
+  const torso = new THREE.Mesh(
+    new RoundedBoxGeometry(0.58, 0.76, 0.34, 4, 0.095),
+    makeMaterial('#334155', 0.72, 0.03),
   );
-  warningBulb.castShadow = true;
-  warningLight.add(warningBulb);
+  torso.position.y = 1.28;
+  torso.castShadow = true;
+  torso.name = 'workerTorso';
+  worker.add(torso);
 
-  const warningGlow = new THREE.PointLight('#ef4444', 1.8, 2.8);
-  warningGlow.position.y = 0.1;
-  warningLight.add(warningGlow);
-  warningLight.visible = false;
-  group.add(warningLight);
+  const vest = new THREE.Mesh(
+    new RoundedBoxGeometry(0.6, 0.58, 0.055, 4, 0.025),
+    makeMaterial('#f59e0b', 0.66, 0.03),
+  );
+  vest.position.set(0, 1.28, 0.195);
+  vest.castShadow = true;
+  vest.name = 'safetyVest';
+  worker.add(vest);
+  [-0.15, 0.15].forEach((yOffset) => {
+    const reflectiveBand = makeBox(0.62, 0.045, 0.018, '#f8fafc', 'reflectiveBand');
+    reflectiveBand.position.set(0, 1.28 + yOffset, 0.228);
+    worker.add(reflectiveBand);
+  });
 
-  group.userData.parts = {
-    horizontalAssembly,
-    mountingTrough,
-    mountingTroughParts,
-    lockHoles,
-    locks,
-    sideWalls,
-    shelves,
-    horizontalBack,
-    horizontalCells,
-    centerLockerTrim,
-    liftingBase,
-    liftingBaseFront,
-    liftingRoof,
-    liftingRoofPanel,
-    body,
-    cap,
-    side,
-    back,
-    base,
-    feet,
-    topModules,
-    doorPanels,
-    cells,
-    panel,
-    panelLight: screen,
-    panelIndicators,
-    labels: [brandLabel, bottomLabel],
-    frameBeams,
-    scan,
-    warningLight,
-    warningBulb,
-    warningGlow,
+  const skinMaterial = makeMaterial(skinColors[skinSeed % skinColors.length], 0.76, 0.01);
+  const neck = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.105, 0.11, 0.16, 18),
+    skinMaterial,
+  );
+  neck.position.y = 1.69;
+  neck.castShadow = true;
+  worker.add(neck);
+
+  const headPivot = new THREE.Group();
+  headPivot.position.y = 1.86;
+  worker.add(headPivot);
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.205, 20, 16), skinMaterial);
+  head.scale.set(0.92, 1.04, 0.9);
+  head.castShadow = true;
+  headPivot.add(head);
+
+  const faceMaterial = makeMaterial('#172033', 0.82, 0);
+  [-0.075, 0.075].forEach((x) => {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.022, 10, 8), faceMaterial);
+    eye.position.set(x * 0.92, 0.035, 0.182);
+    headPivot.add(eye);
+  });
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 9), skinMaterial);
+  nose.scale.set(0.72, 0.9, 1.15);
+  nose.position.set(0, -0.02, 0.198);
+  headPivot.add(nose);
+
+  const helmet = new THREE.Mesh(
+    new THREE.SphereGeometry(0.225, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.58),
+    makeMaterial(stageColor, 0.38, 0.08),
+  );
+  helmet.position.y = 0.12;
+  helmet.castShadow = true;
+  headPivot.add(helmet);
+  const helmetBrim = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.205, 0.218, 0.045, 24),
+    makeMaterial(stageColor, 0.38, 0.08),
+  );
+  helmetBrim.scale.z = 0.72;
+  helmetBrim.position.set(0, 0.09, 0.05);
+  helmetBrim.castShadow = true;
+  helmetBrim.name = 'helmetBrim';
+  headPivot.add(helmetBrim);
+
+  const arms = [];
+  [-0.37, 0.37].forEach((x, armIndex) => {
+    const shoulder = new THREE.Group();
+    shoulder.position.set(x, 1.54, 0);
+    shoulder.rotation.z = armIndex === 0 ? -0.12 : 0.12;
+    const upperArm = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.088, 0.08, 0.31, 14),
+      makeMaterial('#475569', 0.72, 0.03),
+    );
+    upperArm.position.y = -0.14;
+    upperArm.castShadow = true;
+    shoulder.add(upperArm);
+
+    const elbow = new THREE.Group();
+    elbow.position.y = -0.29;
+    shoulder.add(elbow);
+    const elbowJoint = new THREE.Mesh(
+      new THREE.SphereGeometry(0.082, 14, 10),
+      makeMaterial('#475569', 0.72, 0.03),
+    );
+    elbowJoint.castShadow = true;
+    elbow.add(elbowJoint);
+    const forearm = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.076, 0.066, 0.31, 14),
+      makeMaterial('#334155', 0.74, 0.03),
+    );
+    forearm.position.y = -0.14;
+    forearm.castShadow = true;
+    elbow.add(forearm);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.095, 14, 10), skinMaterial);
+    hand.position.y = -0.31;
+    hand.castShadow = true;
+    elbow.add(hand);
+    arms.push({ shoulder, elbow, hand });
+    worker.add(shoulder);
+  });
+
+  const toolGroup = new THREE.Group();
+  toolGroup.visible = showTool;
+  arms[1].elbow.add(toolGroup);
+  const tool = new THREE.Mesh(
+    new RoundedBoxGeometry(0.12, 0.16, 0.28, 3, 0.025),
+    makeMaterial('#1f2937', 0.58, 0.28),
+  );
+  tool.position.set(0, -0.34, 0.14);
+  tool.rotation.x = -0.22;
+  tool.castShadow = true;
+  tool.name = 'handTool';
+  toolGroup.add(tool);
+  const toolTip = makeBox(0.055, 0.055, 0.2, stageColor, 'handToolTip');
+  toolTip.position.set(0, -0.33, 0.36);
+  toolGroup.add(toolTip);
+
+  worker.userData = {
+    head: headPivot,
+    torso,
+    vest,
+    leftArm: arms[0],
+    rightArm: arms[1],
+    legs,
+    toolGroup,
+    toolTip,
+    baseY: worker.position.y,
   };
-
-  return group;
-}
-
-function setPartVisible(mesh, visible) {
-  mesh.visible = visible;
-  if (mesh.material) {
-    mesh.material.transparent = true;
-    mesh.material.opacity = visible ? 1 : 0;
-  }
+  return worker;
 }
 
 function setPartOpacity(mesh, opacity) {
@@ -1852,345 +1586,6 @@ function setPartOpacity(mesh, opacity) {
   };
   updateObject(mesh);
   if (!mesh.material && mesh.traverse) mesh.traverse(updateObject);
-}
-
-function updateLockerModel(group, unit, stage, time, stages) {
-  const parts = group.userData.parts;
-  const stageProgress = unit.assemblyProgress ?? unit.progress;
-  const normalizedProgress = Math.max(0, Math.min(stageProgress / 100, 1));
-  const easedProgress = easeOut(normalizedProgress);
-  const isAssemblyActive = unit.mode === 'assembly';
-
-  const getBuildForIcon = (icon, fallbackIcon = null) => {
-    let targetIndex = stages.findIndex((candidate) => candidate.icon === icon);
-
-    if (targetIndex === -1 && fallbackIcon) {
-      targetIndex = stages.findIndex((candidate) => candidate.icon === fallbackIcon);
-    }
-
-    if (targetIndex === -1) return 0;
-    if (unit.currentIndex > targetIndex) return 1;
-    if (unit.currentIndex < targetIndex) return 0;
-    return easedProgress;
-  };
-
-  const isIconActive = (icon) => stage?.icon === icon && isAssemblyActive;
-
-  const lockStageIndex = stages.findIndex((candidate) => candidate.icon === 'locks');
-  const structureStageIndex = stages.findIndex((candidate) => candidate.icon === 'shelves');
-  const backStageIndex = stages.findIndex((candidate) => candidate.icon === 'back');
-  const lockerStageIndex = stages.findIndex((candidate) => candidate.icon === 'lockers');
-  const finalizeStageIndex = stages.findIndex((candidate) => candidate.icon === 'finalize');
-  const frameStageIndex = stages.findIndex((candidate) => candidate.icon === 'frame');
-  const lockBuild = lockStageIndex === -1
-    ? 0
-    : unit.currentIndex > lockStageIndex
-      ? 1
-      : unit.currentIndex === lockStageIndex
-        ? normalizedProgress
-        : 0;
-  const structureBuild = structureStageIndex === -1
-    ? 0
-    : unit.currentIndex > structureStageIndex
-      ? 1
-      : unit.currentIndex === structureStageIndex
-        ? normalizedProgress
-        : 0;
-  const backBuild = backStageIndex === -1
-    ? 0
-    : unit.currentIndex > backStageIndex
-      ? 1
-      : unit.currentIndex === backStageIndex
-        ? normalizedProgress
-        : 0;
-  const lockerHorizontalBuild = lockerStageIndex === -1
-    ? 0
-    : unit.currentIndex > lockerStageIndex
-      ? 1
-      : unit.currentIndex === lockerStageIndex
-        ? normalizedProgress
-        : 0;
-  const finalizeBuild = finalizeStageIndex === -1
-    ? 0
-    : unit.currentIndex > finalizeStageIndex
-      ? 1
-      : unit.currentIndex === finalizeStageIndex
-        ? normalizedProgress
-        : 0;
-  const horizontalAssemblyEndIndex = Math.max(
-    lockStageIndex,
-    structureStageIndex,
-    backStageIndex,
-    lockerStageIndex,
-    finalizeStageIndex,
-  );
-  const usesHorizontalAssembly = lockStageIndex >= 0 && horizontalAssemblyEndIndex >= lockStageIndex;
-  const horizontalAssemblyVisible = usesHorizontalAssembly
-    && unit.currentIndex >= lockStageIndex;
-  setPartVisible(parts.horizontalAssembly, horizontalAssemblyVisible);
-  const verticalAssemblyVisible = !usesHorizontalAssembly;
-  const frameBuild = verticalAssemblyVisible
-    ? frameStageIndex >= 0
-      ? getBuildForIcon('frame')
-      : horizontalAssemblyEndIndex >= 0 && unit.currentIndex > horizontalAssemblyEndIndex
-        ? 1
-        : 0
-    : 0;
-  const doorBuild = getBuildForIcon('door');
-  const roofStageIndex = stages.findIndex((candidate) => candidate.icon === 'roof');
-  const roofBuild = roofStageIndex >= 0 ? getBuildForIcon('roof') : frameBuild;
-  const lockerBuild = getBuildForIcon('lockers');
-  const electronicsBuild = getBuildForIcon('electronics');
-  const testBuild = getBuildForIcon('test');
-
-  parts.mountingTroughParts.forEach((part) => setPartOpacity(part, horizontalAssemblyVisible ? 1 : 0));
-  parts.lockHoles.forEach((hole) => setPartOpacity(hole, horizontalAssemblyVisible ? 1 : 0));
-  parts.locks.forEach((lock, index) => {
-    const rawLockProgress = horizontalAssemblyVisible
-      ? Math.max(0, Math.min(lockBuild * LOCK_COUNT - index, 1))
-      : 0;
-    const lockProgress = easeOut(rawLockProgress);
-    const shouldLocksBeVisible = unit.currentIndex === lockStageIndex && rawLockProgress > 0.01;
-    lock.visible = shouldLocksBeVisible;
-    lock.position.z = 0.62 + (1 - lockProgress) * 0.9;
-    lock.position.x = Math.sin((1 - lockProgress) * Math.PI) * 0.2;
-    lock.rotation.z = (1 - lockProgress) * 0.42;
-    lock.scale.setScalar(0.72 + lockProgress * 0.28);
-
-    lock.userData.meshes.forEach((mesh) => {
-      setPartOpacity(mesh, lockProgress);
-      mesh.material.emissive = new THREE.Color('#facc15');
-      mesh.material.emissiveIntensity =
-        isIconActive('locks') && rawLockProgress > 0 && rawLockProgress < 1
-          ? 0.35 + Math.sin(time * 8) * 0.12
-          : 0;
-    });
-  });
-
-  const structureActive = structureStageIndex >= 0 && unit.currentIndex === structureStageIndex;
-  const structureCompleted = structureStageIndex >= 0 && unit.currentIndex > structureStageIndex;
-  parts.sideWalls.forEach((wall, index) => {
-    const rawWallProgress = horizontalAssemblyVisible
-      ? structureCompleted
-        ? 1
-        : structureActive
-          ? Math.max(0, Math.min((structureBuild / 0.3) * 2 - index, 1))
-          : 0
-      : 0;
-    const wallProgress = easeOut(rawWallProgress);
-    setPartOpacity(wall, wallProgress);
-    wall.position.x = wall.userData.targetX * (1 + (1 - wallProgress) * 0.7);
-    wall.position.y = wall.userData.targetY + (1 - wallProgress) * 0.34;
-    wall.rotation.z = (1 - wallProgress) * (index === 0 ? -0.16 : 0.16);
-  });
-
-  parts.shelves.forEach((shelf, index) => {
-    const shelfTimeline = Math.max(0, (structureBuild - 0.3) / 0.7) * SHELF_COUNT;
-    const rawShelfProgress = horizontalAssemblyVisible
-      ? structureCompleted
-        ? 1
-        : structureActive
-          ? Math.max(0, Math.min(shelfTimeline - index, 1))
-          : 0
-      : 0;
-    const shelfProgress = easeOut(rawShelfProgress);
-    setPartOpacity(shelf, shelfProgress);
-    shelf.position.y = shelf.userData.targetY + (1 - shelfProgress) * 0.78;
-    shelf.scale.x = 0.72 + shelfProgress * 0.28;
-    shelf.material.emissive = new THREE.Color('#22d3ee');
-    shelf.material.emissiveIntensity =
-      rawShelfProgress > 0 && rawShelfProgress < 1
-        ? 0.22 + Math.sin(time * 7) * 0.08
-        : 0;
-  });
-
-  const horizontalBackProgress = horizontalAssemblyVisible ? easeOut(backBuild) : 0;
-  setPartOpacity(parts.horizontalBack, horizontalBackProgress > 0 ? 1 : 0);
-  parts.horizontalBack.position.y = parts.horizontalBack.userData.targetY + (1 - horizontalBackProgress) * 1.2; // Animate from higher Y
-  parts.horizontalBack.rotation.x = (1 - horizontalBackProgress) * Math.PI / 2; // Rotate around X to simulate falling
-  parts.horizontalBack.rotation.z = (1 - horizontalBackProgress) * 0.08;
-
-  parts.horizontalCells.forEach((cell, index) => {
-    const cellBuild = Math.min(lockerHorizontalBuild / 0.6, 1);
-    const rawCellProgress = horizontalAssemblyVisible
-      ? Math.max(0, Math.min(cellBuild * LOCKER_COUNT - index, 1))
-      : 0;
-    const cellProgress = easeOut(rawCellProgress);
-    cell.visible = cellProgress > 0.01;
-    cell.position.x = cell.userData.targetX + (1 - cellProgress) * Math.sign(cell.userData.targetX) * 1.5;
-    cell.position.y = cell.userData.targetY + (1 - cellProgress) * 0.52;
-    cell.scale.setScalar(0.82 + cellProgress * 0.18);
-    cell.userData.meshes.forEach((mesh) => setPartOpacity(mesh, cellProgress));
-  });
-
-  const centerTrimProgress = horizontalAssemblyVisible
-    ? easeOut(Math.max(0, Math.min(lockerHorizontalBuild * 4, 1)))
-    : 0;
-  setPartOpacity(parts.centerLockerTrim, centerTrimProgress);
-  parts.centerLockerTrim.position.y = parts.centerLockerTrim.userData.targetY
-    + (1 - centerTrimProgress) * 0.48;
-
-  const finalizeActive = finalizeStageIndex >= 0 && unit.currentIndex === finalizeStageIndex;
-  const finalizeCompleted = finalizeStageIndex >= 0 && unit.currentIndex > finalizeStageIndex;
-  const liftProgress = finalizeCompleted
-    ? 1
-    : finalizeActive
-      ? easeOut(Math.max(0, Math.min((finalizeBuild - 0.12) / 0.58, 1)))
-      : 0;
-  parts.horizontalAssembly.rotation.x = -Math.PI * 0.5 * liftProgress;
-  const liftingBaseProgress = finalizeCompleted
-    ? 1
-    : finalizeActive
-      ? easeOut(Math.max(0, Math.min((finalizeBuild - 0.04) / 0.28, 1)))
-      : 0;
-  setPartOpacity(parts.liftingBase, liftingBaseProgress);
-  parts.liftingBase.position.z = parts.liftingBase.userData.targetZ
-    - (1 - liftingBaseProgress) * 0.85;
-  setPartOpacity(parts.liftingBaseFront, liftingBaseProgress);
-  parts.liftingBaseFront.position.z = parts.liftingBaseFront.userData.targetZ
-    - (1 - liftingBaseProgress) * 0.85;
-  const liftingRoofProgress = finalizeCompleted
-    ? 1
-    : finalizeActive
-      ? easeOut(Math.max(0, Math.min((finalizeBuild - 0.72) / 0.28, 1)))
-      : 0;
-  setPartOpacity(parts.liftingRoof, liftingRoofProgress);
-  parts.liftingRoof.position.y = parts.liftingRoof.userData.targetY;
-  parts.liftingRoof.position.z = parts.liftingRoof.userData.targetZ
-    + (1 - liftingRoofProgress) * 0.9;
-  setPartOpacity(parts.liftingRoofPanel, liftingRoofProgress);
-  parts.liftingRoofPanel.position.y = parts.liftingRoofPanel.userData.targetY;
-  parts.liftingRoofPanel.position.z = parts.liftingRoofPanel.userData.targetZ
-    + (1 - liftingRoofProgress) * 0.9;
-
-  parts.frameBeams.forEach((beam, index) => {
-    const beamProgress = Math.max(0, Math.min(frameBuild * parts.frameBeams.length - index, 1));
-    setPartOpacity(beam, frameBuild > 0 ? 0.18 + beamProgress * 0.82 : 0);
-  });
-  setPartOpacity(parts.base, Math.min(1, frameBuild * 1.35));
-  setPartOpacity(parts.cap, verticalAssemblyVisible ? Math.min(1, roofBuild * 1.2) : 0);
-  parts.topModules.forEach((module, index) => {
-    const moduleProgress = verticalAssemblyVisible
-      ? Math.max(0, Math.min(roofBuild * parts.topModules.length - index, 1))
-      : 0;
-    setPartOpacity(module, moduleProgress);
-    module.position.y = 3.24 + (1 - moduleProgress) * 0.34;
-  });
-  parts.feet.forEach((foot) => setPartOpacity(foot, Math.min(1, frameBuild * 1.5)));
-
-  const verticalDoorBuild = verticalAssemblyVisible ? Math.max(doorBuild, lockerBuild) : 0;
-  const verticalLockerBuild = verticalAssemblyVisible ? lockerBuild : 0;
-  setPartOpacity(parts.body, verticalDoorBuild);
-  setPartOpacity(parts.back, verticalDoorBuild);
-  setPartOpacity(parts.side, verticalDoorBuild);
-  parts.doorPanels.forEach((panel, index) => {
-    const doorProgress = Math.max(0, Math.min(verticalDoorBuild * parts.doorPanels.length - index * 0.72, 1));
-    setPartOpacity(panel, doorProgress);
-    panel.position.z = 0.64 + (1 - doorProgress) * 0.38;
-    panel.rotation.y =
-      isIconActive('door')
-        ? Math.sin(doorProgress * Math.PI) * (index % 2 === 0 ? 0.18 : -0.18)
-        : 0;
-  });
-
-  parts.cells.forEach((cell, index) => {
-    const cellProgress = Math.max(0, Math.min(verticalLockerBuild * parts.cells.length - index * 0.58, 1));
-    setPartOpacity(cell, cellProgress);
-    cell.position.z = 0.7 + (1 - cellProgress) * 0.18;
-  });
-  setPartOpacity(parts.panel, electronicsBuild);
-  setPartOpacity(parts.panelLight, electronicsBuild);
-  parts.panelIndicators.forEach((indicator, index) => {
-    const indicatorProgress = Math.max(0, Math.min(electronicsBuild * 3 - index * 0.55, 1));
-    setPartOpacity(indicator, indicatorProgress);
-    indicator.material.emissiveIntensity =
-      isIconActive('electronics')
-        ? indicatorProgress * (0.65 + Math.sin(time * 7 + index) * 0.35)
-        : indicatorProgress * 0.25;
-  });
-  parts.labels.forEach((label, index) => {
-    const labelProgress = Math.max(0, Math.min(verticalLockerBuild * 2 - index * 0.5, 1));
-    setPartOpacity(label, labelProgress);
-  });
-  setPartVisible(parts.scan, testBuild > 0);
-  parts.warningLight.visible = Boolean(unit.isBlocked);
-  if (unit.isBlocked) {
-    const alarmPulse = 1 + Math.sin(time * 9) * 0.18;
-    parts.warningBulb.scale.setScalar(alarmPulse);
-    parts.warningBulb.material.emissiveIntensity = 1.7 + Math.sin(time * 10) * 0.55;
-    parts.warningGlow.intensity = 1.7 + Math.sin(time * 10) * 0.65;
-  } else {
-    parts.warningBulb.scale.setScalar(1);
-    parts.warningBulb.material.emissiveIntensity = 0;
-    parts.warningGlow.intensity = 0;
-  }
-
-  if (isIconActive('door')) {
-    parts.doorPanels.forEach((panel, index) => {
-      const snap = Math.sin(normalizedProgress * Math.PI * 3 + index * 0.45) * 0.012 * (1 - normalizedProgress);
-      panel.scale.y = 1 + snap;
-    });
-  } else {
-    parts.doorPanels.forEach((panel) => {
-      panel.scale.y = 1;
-    });
-  }
-
-  if (isIconActive('frame')) {
-    const pulse = 1 + Math.sin(time * 3.2) * 0.018 * (1 - normalizedProgress * 0.55);
-    parts.frameBeams.forEach((beam) => beam.scale.set(pulse, 1, pulse));
-    parts.frameBeams.forEach((beam, index) => {
-      beam.material.emissive = new THREE.Color(index % 2 ? '#facc15' : '#38bdf8');
-      beam.material.emissiveIntensity = 0.16 + Math.sin(time * 3 + index) * 0.06;
-    });
-  } else {
-    parts.frameBeams.forEach((beam) => {
-      beam.scale.set(1, 1, 1);
-      beam.material.emissive = new THREE.Color('#000000');
-      beam.material.emissiveIntensity = 0;
-    });
-  }
-
-  if (isIconActive('finalize')) {
-    const roofPulse = 1 + Math.sin(time * 3.8) * 0.018 * (1 - normalizedProgress * 0.4);
-    parts.cap.scale.set(1, roofPulse, 1);
-    parts.cap.position.y = 3.08 + (1 - finalizeBuild) * 0.42;
-    parts.cap.material.emissive = new THREE.Color('#38bdf8');
-    parts.cap.material.emissiveIntensity = 0.18 + Math.sin(time * 4.2) * 0.08;
-  } else {
-    parts.cap.scale.set(1, 1, 1);
-    parts.cap.position.y = 3.08;
-    parts.cap.material.emissive = new THREE.Color('#000000');
-    parts.cap.material.emissiveIntensity = 0;
-  }
-
-  if (isIconActive('lockers')) {
-    parts.cells.forEach((cell, index) => {
-      const target = normalizedProgress * parts.cells.length;
-      const scale = index < target ? 1 + Math.sin(time * 2.6 + index) * 0.03 : 0.76;
-      cell.scale.setScalar(scale);
-    });
-  } else {
-    parts.cells.forEach((cell) => cell.scale.setScalar(1));
-  }
-
-  if (isIconActive('electronics')) {
-    const pulse = 0.65 + Math.sin(time * 3.4) * 0.35;
-    parts.panelLight.material.emissive = new THREE.Color('#38bdf8');
-    parts.panelLight.material.emissiveIntensity = pulse;
-    parts.panel.position.z = 0.8 + (1 - electronicsBuild) * 0.36;
-  } else {
-    parts.panelLight.material.emissive = new THREE.Color('#000000');
-    parts.panelLight.material.emissiveIntensity = electronicsBuild > 0.99 ? 0.2 : 0;
-    parts.panel.position.z = 0.8;
-  }
-
-  if (testBuild > 0) {
-    const scanProgress = stage?.icon === 'test' ? normalizedProgress : 1;
-    parts.scan.position.y = 0.42 + scanProgress * 2.32;
-    parts.scan.material.emissive = new THREE.Color('#8b5cf6');
-    parts.scan.material.emissiveIntensity = isAssemblyActive ? 0.9 : 0.35;
-  }
 }
 
 function cloneGlbComponent(template) {
@@ -3134,15 +2529,20 @@ function ThreeProductionScene({
   trailUnits,
   scheduleConflictCount = 0,
   workersPerStation = [],
+  offlineStationWorkers = [],
   onAssemblyMetrics,
 }) {
   const mountRef = useRef(null);
   const controlsRef = useRef(null);
-  const latestRef = useRef({ stages, visibleUnits, trailUnits, scheduleConflictCount, workersPerStation });
+  const latestRef = useRef({
+    stages, visibleUnits, trailUnits, scheduleConflictCount, workersPerStation, offlineStationWorkers,
+  });
   const [stageOneModelStatus, setStageOneModelStatus] = useState('loading');
   const troughLyingPosesRef = useRef(createDefaultTroughLyingPoses());
 
-  latestRef.current = { stages, visibleUnits, trailUnits, scheduleConflictCount, workersPerStation };
+  latestRef.current = {
+    stages, visibleUnits, trailUnits, scheduleConflictCount, workersPerStation, offlineStationWorkers,
+  };
 
   const zoomCamera = (factor) => {
     const controls = controlsRef.current;
@@ -3355,180 +2755,10 @@ function ThreeProductionScene({
         marker.rotation.y = stationAngle;
 
         const stageColor = stage?.color ?? '#2563eb';
-        const skinColors = ['#d6a47a', '#9a6848', '#e0b48f', '#704832'];
-        const worker = new THREE.Group();
+        const worker = createWorkerFigure(stageColor, index, index === 0 || index === 2);
         worker.name = `worker-${index + 1}-${workerSlot + 1}`;
-        worker.visible = SHOW_WORKERS;
-        worker.position.y = -0.095;
-        worker.scale.setScalar(1.12);
-
-        const hips = new THREE.Mesh(
-          new RoundedBoxGeometry(0.46, 0.24, 0.3, 3, 0.055),
-          makeMaterial('#1e293b', 0.76, 0.04),
-        );
-        hips.position.y = 0.78;
-        hips.castShadow = true;
-        hips.name = 'workerHips';
-        worker.add(hips);
-
-        const legs = [];
-        [-0.14, 0.14].forEach((x, legIndex) => {
-          const legPivot = new THREE.Group();
-          legPivot.position.set(x, 0.72, 0);
-          const leg = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.085, 0.095, 0.62, 14),
-            makeMaterial('#25344a', 0.78, 0.04),
-          );
-          leg.position.y = -0.29;
-          leg.castShadow = true;
-          legPivot.add(leg);
-          const boot = new THREE.Mesh(
-            new RoundedBoxGeometry(0.2, 0.12, 0.34, 3, 0.035),
-            makeMaterial('#111827', 0.68, 0.12),
-          );
-          boot.position.set(0, -0.62, 0.08);
-          boot.castShadow = true;
-          boot.name = 'workerBoot';
-          legPivot.add(boot);
-          legs.push(legPivot);
-          worker.add(legPivot);
-        });
-
-        const torso = new THREE.Mesh(
-          new RoundedBoxGeometry(0.58, 0.76, 0.34, 4, 0.095),
-          makeMaterial('#334155', 0.72, 0.03),
-        );
-        torso.position.y = 1.28;
-        torso.castShadow = true;
-        torso.name = 'workerTorso';
-        worker.add(torso);
-
-        const vest = new THREE.Mesh(
-          new RoundedBoxGeometry(0.6, 0.58, 0.055, 4, 0.025),
-          makeMaterial('#f59e0b', 0.66, 0.03),
-        );
-        vest.position.set(0, 1.28, 0.195);
-        vest.castShadow = true;
-        vest.name = 'safetyVest';
-        worker.add(vest);
-        [-0.15, 0.15].forEach((yOffset) => {
-          const reflectiveBand = makeBox(0.62, 0.045, 0.018, '#f8fafc', 'reflectiveBand');
-          reflectiveBand.position.set(0, 1.28 + yOffset, 0.228);
-          worker.add(reflectiveBand);
-        });
-
-        const skinMaterial = makeMaterial(skinColors[index % skinColors.length], 0.76, 0.01);
-        const neck = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.105, 0.11, 0.16, 18),
-          skinMaterial,
-        );
-        neck.position.y = 1.69;
-        neck.castShadow = true;
-        worker.add(neck);
-
-        const headPivot = new THREE.Group();
-        headPivot.position.y = 1.86;
-        worker.add(headPivot);
-
-        const head = new THREE.Mesh(new THREE.SphereGeometry(0.205, 20, 16), skinMaterial);
-        head.scale.set(0.92, 1.04, 0.9);
-        head.castShadow = true;
-        headPivot.add(head);
-
-        const faceMaterial = makeMaterial('#172033', 0.82, 0);
-        [-0.075, 0.075].forEach((x) => {
-          const eye = new THREE.Mesh(new THREE.SphereGeometry(0.022, 10, 8), faceMaterial);
-          eye.position.set(x * 0.92, 0.035, 0.182);
-          headPivot.add(eye);
-        });
-        const nose = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 9), skinMaterial);
-        nose.scale.set(0.72, 0.9, 1.15);
-        nose.position.set(0, -0.02, 0.198);
-        headPivot.add(nose);
-
-        const helmet = new THREE.Mesh(
-          new THREE.SphereGeometry(0.225, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.58),
-          makeMaterial(stageColor, 0.38, 0.08),
-        );
-        helmet.position.y = 0.12;
-        helmet.castShadow = true;
-        headPivot.add(helmet);
-        const helmetBrim = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.205, 0.218, 0.045, 24),
-          makeMaterial(stageColor, 0.38, 0.08),
-        );
-        helmetBrim.scale.z = 0.72;
-        helmetBrim.position.set(0, 0.09, 0.05);
-        helmetBrim.castShadow = true;
-        helmetBrim.name = 'helmetBrim';
-        headPivot.add(helmetBrim);
-
-        const arms = [];
-        [-0.37, 0.37].forEach((x, armIndex) => {
-          const shoulder = new THREE.Group();
-          shoulder.position.set(x, 1.54, 0);
-          shoulder.rotation.z = armIndex === 0 ? -0.12 : 0.12;
-          const upperArm = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.088, 0.08, 0.31, 14),
-            makeMaterial('#475569', 0.72, 0.03),
-          );
-          upperArm.position.y = -0.14;
-          upperArm.castShadow = true;
-          shoulder.add(upperArm);
-
-          const elbow = new THREE.Group();
-          elbow.position.y = -0.29;
-          shoulder.add(elbow);
-          const elbowJoint = new THREE.Mesh(
-            new THREE.SphereGeometry(0.082, 14, 10),
-            makeMaterial('#475569', 0.72, 0.03),
-          );
-          elbowJoint.castShadow = true;
-          elbow.add(elbowJoint);
-          const forearm = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.076, 0.066, 0.31, 14),
-            makeMaterial('#334155', 0.74, 0.03),
-          );
-          forearm.position.y = -0.14;
-          forearm.castShadow = true;
-          elbow.add(forearm);
-          const hand = new THREE.Mesh(new THREE.SphereGeometry(0.095, 14, 10), skinMaterial);
-          hand.position.y = -0.31;
-          hand.castShadow = true;
-          elbow.add(hand);
-          arms.push({ shoulder, elbow, hand });
-          worker.add(shoulder);
-        });
-
-        const toolGroup = new THREE.Group();
-        toolGroup.visible = index === 0 || index === 2;
-        arms[1].elbow.add(toolGroup);
-        const tool = new THREE.Mesh(
-          new RoundedBoxGeometry(0.12, 0.16, 0.28, 3, 0.025),
-          makeMaterial('#1f2937', 0.58, 0.28),
-        );
-        tool.position.set(0, -0.34, 0.14);
-        tool.rotation.x = -0.22;
-        tool.castShadow = true;
-        tool.name = 'handTool';
-        toolGroup.add(tool);
-        const toolTip = makeBox(0.055, 0.055, 0.2, stageColor, 'handToolTip');
-        toolTip.position.set(0, -0.33, 0.36);
-        toolGroup.add(toolTip);
-
-        worker.userData = {
-          index,
-          seed: workerSlot,
-          head: headPivot,
-          torso,
-          vest,
-          leftArm: arms[0],
-          rightArm: arms[1],
-          legs,
-          toolGroup,
-          toolTip,
-          baseY: worker.position.y,
-        };
+        worker.userData.index = index;
+        worker.userData.seed = workerSlot;
         stationWorkers.push(worker);
         marker.add(worker);
 
@@ -3603,6 +2833,49 @@ function ThreeProductionScene({
             });
             zone.position.set(pos.x, 0.02, pos.z);
             staticGroup.add(zone);
+
+            // Pracownicy przy stanowisku wykonczenia. Wczesniej brakowalo ich tu,
+            // bo ta petla (offlineStationVecs) jest osobna od glownej petli
+            // routePoints, ktora buduje pracownikow tylko dla stacji rolotoku.
+            // Liczba - OSOBNE pole na KAZDE stanowisko (offlineStationWorkers[i]),
+            // rozlozeni po obu stronach palety tak samo jak na stacjach rolotoku.
+            // Czysto wizualne - czas etapu 4 nadal liczy sie z workersPerStation.
+            const offlineStageIdx = getOfflineStageIndex(stagesNow.length);
+            const offlineStageColor = stagesNow[offlineStageIdx]?.color ?? '#db2777';
+            const offlineStationWorkersCfg = latestRef.current.offlineStationWorkers ?? [];
+            const offlineWorkerCount = Math.max(
+              0,
+              Math.round(Number(offlineStationWorkersCfg[i] ?? 1)) || 0,
+            );
+            const outward = i % 2 === 0 ? -1 : 1;
+            const offlineWorkerGap = TUNE.sectors?.workerSpacing ?? 1.15;
+            const offlineLeftN = Math.ceil(offlineWorkerCount / 2);
+            const offlineRightN = offlineWorkerCount - offlineLeftN;
+            const offlinePlacements = [];
+            [[offlineLeftN, outward], [offlineRightN, -outward]].forEach(([n, sign]) => {
+              for (let k = 0; k < n; k += 1) {
+                offlinePlacements.push({ sign, along: (k - (n - 1) / 2) * offlineWorkerGap });
+              }
+            });
+            offlinePlacements.forEach((placement, workerSlot) => {
+              const workerPos = new THREE.Vector3(
+                pos.x + placement.sign * ((off.pallet?.width ?? 2.6) / 2 + 1.1),
+                0.08,
+                pos.z + placement.along,
+              );
+              const facing = pos.clone().sub(workerPos);
+              const worker = createWorkerFigure(offlineStageColor, i * 4 + workerSlot, true);
+              worker.name = `offlineWorker-${i + 1}-${workerSlot + 1}`;
+              worker.userData.index = offlineStageIdx;
+              worker.userData.seed = workerSlot;
+              worker.userData.serverIndex = i;
+              const workerMarker = new THREE.Group();
+              workerMarker.position.copy(workerPos);
+              workerMarker.rotation.y = Math.atan2(facing.x, facing.z);
+              workerMarker.add(worker);
+              stationWorkers.push(worker);
+              staticGroup.add(workerMarker);
+            });
           });
           // Paleta na koncu rolotoku — na ziemi ZA ostatnia stacja (nie pod tasma),
           // tam spuszczane sa gotowe paczkomaty na palete (etap 3 -> dojazd).
@@ -3978,7 +3251,7 @@ function ThreeProductionScene({
 
     const render = () => {
       const time = clock.getElapsedTime();
-      const signature = latestRef.current.stages.map((stage) => `${stage.id}:${stage.color}:${stage.name}:${stage.duration}`).join('|') + '|W:' + (latestRef.current.workersPerStation ?? []).join(',');
+      const signature = latestRef.current.stages.map((stage) => `${stage.id}:${stage.color}:${stage.name}:${stage.duration}`).join('|') + '|W:' + (latestRef.current.workersPerStation ?? []).join(',') + '|OW:' + (latestRef.current.offlineStationWorkers ?? []).join(',');
 
       if (signature !== lastStageSignature) {
         lastStageSignature = signature;
@@ -4354,12 +3627,19 @@ function ThreeProductionScene({
       });
 
       stationWorkers.forEach((worker) => {
-        const active = latestRef.current.visibleUnits.some(
-          (unit) =>
-            unit.currentIndex === worker.userData.index
-            && unit.mode === 'assembly'
-            && (unit.assemblyProgress ?? 0) > 0,
-        );
+        // Pracownicy na stanowiskach offline (etap 4) maja serverIndex - sa
+        // "aktywni" gdy NA ICH stanowisku trwa praca (offline), niezaleznie od
+        // pozostalych stacji rolotoku, ktore sprawdzaja tylko currentIndex+mode.
+        const active = worker.userData.serverIndex !== undefined
+          ? latestRef.current.visibleUnits.some(
+            (unit) => unit.mode === 'offline' && unit.serverIndex === worker.userData.serverIndex,
+          )
+          : latestRef.current.visibleUnits.some(
+            (unit) =>
+              unit.currentIndex === worker.userData.index
+              && unit.mode === 'assembly'
+              && (unit.assemblyProgress ?? 0) > 0,
+          );
         const phase = time * (active ? 3.4 : 1.1) + worker.userData.index * 0.8 + (worker.userData.seed ?? 0) * 1.7;
         const workSwing = Math.sin(phase);
         const precisionPulse = Math.sin(phase * 2.4);
@@ -4535,6 +3815,7 @@ function ProductionLine({
   productionFinished,
   scheduleConflictCount,
   workersPerStation,
+  offlineStationWorkers,
   onAssemblyMetrics,
 }) {
   const leadUnit = visibleUnits[0] ?? {
@@ -4624,6 +3905,7 @@ function ProductionLine({
             trailUnits={trailUnits}
             scheduleConflictCount={scheduleConflictCount}
             workersPerStation={workersPerStation}
+            offlineStationWorkers={offlineStationWorkers}
             onAssemblyMetrics={onAssemblyMetrics}
           />
         </div>
@@ -4678,6 +3960,11 @@ function App() {
     () => TUNE.offline?.palletTravel ?? 6,
   );
   const [workersPerStation, setWorkersPerStation] = useState(() => baseStages.map(() => 1));
+  // Liczba pracownikow WIZUALNIE na kazdym z rownoleglych stanowisk offline
+  // (etap 4) osobno - Stanowisko 1 i Stanowisko 2 moga miec inna liczbe.
+  // Czysto wizualne: czas etapu 4 nadal liczy sie z workersPerStation (jeden
+  // wspolny mnoznik dla calego etapu), tu tylko ile sylwetek sie pokazuje.
+  const [offlineStationWorkers, setOfflineStationWorkers] = useState(() => [1, 1]);
   const [workerEffect, setWorkerEffect] = useState(DEFAULT_WORKER_EFFECT);
   const [stopwatchRunning, setStopwatchRunning] = useState(false);
   const [stopwatchElapsed, setStopwatchElapsed] = useState(0);
@@ -4878,6 +4165,16 @@ function App() {
     });
   };
 
+  const updateOfflineStationWorkerCount = (stationIndex, value) => {
+    setOfflineStationWorkers((current) => {
+      const size = Math.max(current.length, stationIndex + 1, getOfflineServerCount());
+      const next = Array.from({ length: size }, (_, i) => current[i] ?? 1);
+      const parsed = Math.round(Number(value));
+      next[stationIndex] = Number.isFinite(parsed) ? Math.max(0, parsed) : 1;
+      return next;
+    });
+  };
+
   const updateWorkerEffect = (patch) => {
     setWorkerEffect((current) => ({
       ...current,
@@ -4946,6 +4243,8 @@ function App() {
         updateOfflinePalletTravel={updateOfflinePalletTravel}
         workersPerStation={workersPerStation}
         updateWorkerCount={updateWorkerCount}
+        offlineStationWorkers={offlineStationWorkers}
+        updateOfflineStationWorkerCount={updateOfflineStationWorkerCount}
         workerEffect={normalizedWorkerEffect}
         updateWorkerEffect={updateWorkerEffect}
         throughputPerHour={throughputPerHour}
@@ -4969,6 +4268,7 @@ function App() {
         productionFinished={elapsed >= animationCycle}
         scheduleConflictCount={productionSchedule.reservationConflicts.length}
         workersPerStation={normalizedWorkers}
+        offlineStationWorkers={offlineStationWorkers}
         onAssemblyMetrics={handleAssemblyMetrics}
       />
       <StageEditor
