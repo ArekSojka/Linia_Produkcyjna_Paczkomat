@@ -561,9 +561,23 @@ const getVisibleUnitsFromSchedule = (schedule, elapsed, stageCount, lane = 'lead
 const getUnitPose = (unit, points) => {
   if (!points.length) return { position: new THREE.Vector3(), angle: 0, atStop: true };
 
+  // Etap 0 statyczny (podmontaz koryt na stole): koryto NIE jedzie po tasmie
+  // wejsciowej ani po stole - pojawia sie na stole, a po podmontazu znika i
+  // pojawia sie na poczatku skroconego rolotoku (patrz TUNE.staticFirstStage).
+  const sfs = TUNE.staticFirstStage ?? {};
+  const staticFirst = (sfs.enabled ?? false) && points.length >= 2;
+
   if (unit.mode === 'entry') {
-    const end = points[0];
     const direction = getRouteTangent(points, 0);
+    if (staticFirst) {
+      // Koryto pojawia sie od razu NA STOLE (opadanie robi placeHalf w osi Y).
+      return {
+        position: points[0].clone(),
+        angle: Math.atan2(direction.x, direction.z),
+        atStop: true,
+      };
+    }
+    const end = points[0];
     const start = end.clone().addScaledVector(direction, -ENTRY_CONVEYOR_LENGTH);
     const travelProgress = Math.max(0, Math.min((unit.travelProgress ?? 0) / 100, 1));
     const eased = 0.5 - Math.cos(travelProgress * Math.PI) / 2;
@@ -576,9 +590,32 @@ const getUnitPose = (unit, points) => {
   }
 
   if (unit.mode === 'travel') {
+    const travelProgress = Math.max(0, Math.min((unit.travelProgress ?? 0) / 100, 1));
+    if (staticFirst && unit.travelFrom === 0 && unit.travelTo === 1) {
+      // Przeniesienie ze stolu na rolotok: przez transferPortion czasu czesc
+      // jeszcze LEZY na stole (zdejmowanie), potem pojawia sie na poczatku
+      // rolotoku (leadIn przed etapem 1, cofnieta o appearInset w glab rolek)
+      // i normalnie dojezdza do stacji etapu 1.
+      const direction = getRouteTangent(points, 1);
+      const angle = Math.atan2(direction.x, direction.z);
+      const transfer = THREE.MathUtils.clamp(sfs.transferPortion ?? 0.35, 0.02, 0.9);
+      if (travelProgress < transfer) {
+        return { position: points[0].clone(), angle, atStop: true };
+      }
+      const rideStart = points[1].clone().addScaledVector(
+        direction,
+        -Math.max((sfs.conveyorLeadIn ?? 7) - (sfs.appearInset ?? 2.8), 0.5),
+      );
+      const t = (travelProgress - transfer) / (1 - transfer);
+      const eased = t < 1 ? 0.5 - Math.cos(t * Math.PI) / 2 : 1;
+      return {
+        position: rideStart.lerp(points[1], eased),
+        angle,
+        atStop: travelProgress >= 1,
+      };
+    }
     const start = points[Math.min(unit.travelFrom, points.length - 1)];
     const end = points[Math.min(unit.travelTo, points.length - 1)];
-    const travelProgress = Math.max(0, Math.min((unit.travelProgress ?? 0) / 100, 1));
     const eased = travelProgress < 1 ? 0.5 - Math.cos(travelProgress * Math.PI) / 2 : 1;
     const position = start.clone().lerp(end, eased);
     const direction = end.clone().sub(start);
@@ -1247,10 +1284,17 @@ function createSectorZone({
       ctx.fillText(sublabel, canvas.width / 2, canvas.height / 2 + 42);
     }
   });
-  plane.material.side = THREE.DoubleSide;
-  plane.rotation.y = Math.PI / 2; // czolem w poprzek linii (czytelne z domyslnej kamery)
-  plane.position.set(0, labelHeight, 0);
-  group.add(plane);
+  // Czytelna z OBU stron: DoubleSide na jednej plaszczyznie pokazywalby od
+  // tylu LUSTRZANE odbicie tekstu. Zamiast tego dwie plaszczyzny plecami do
+  // siebie, obie FrontSide, obie z ta sama (nieodwrocona) tekstura.
+  const labelGroup = new THREE.Group();
+  labelGroup.rotation.y = Math.PI / 2; // czolem w poprzek linii (czytelne z domyslnej kamery)
+  labelGroup.position.set(0, labelHeight, 0);
+  const labelBack = plane.clone();
+  labelBack.name = 'labelBack';
+  labelBack.rotation.y = Math.PI;
+  labelGroup.add(plane, labelBack);
+  group.add(labelGroup);
 
   // Pusty slot na przyszle modele pracownikow (na srodku strefy).
   const slot = new THREE.Group();
@@ -2346,6 +2390,49 @@ function updateTwoPartLockerModel(
   parts.moduleRoots.forEach((root) => {
     const isFirstModule = root.userData.moduleIndex === 0;
     const fr = modFr(root.userData.moduleIndex);
+
+    // === STOL UCHYLNY (wywrotnica, TUNE.tiltTable) ===
+    // Czesc jedzie SZTYWNO ze stolem: czysty obrot o 90 stopni wokol zawiasu H,
+    // wyliczonego tak, by pozycja startowa (lezenie na stole = dokladnie stara
+    // pozycja przyjazdu) i koncowa (stanie w podstawie = dokladnie stara pozycja
+    // finalna z nudge'ami) byly IDENTYCZNE jak dotad - zmienia sie tylko sciezka.
+    // Zawias wychodzi przy podlodze miedzy koncem rolotoku a paleta, jak w
+    // prawdziwej wywrotnicy. Obie polowy trafiaja w TO SAMO miejsce w swiecie -
+    // dopasowanie gniazda robi przesuw palety (palletShift w placeHalf).
+    const tiltCfg = TUNE.tiltTable ?? {};
+    if (finalLanding?.enabled && finalLanding.tilt && (tiltCfg.enabled ?? false)) {
+      const tiltStart = tiltCfg.settlePortion ?? 0.15;
+      const tiltSpan = Math.max(tiltCfg.tiltPortion ?? 0.55, 0.05);
+      const tiltProgress = smoothInOut((fr.finalize - tiltStart) / tiltSpan);
+      const theta = Math.PI * 0.5 * tiltProgress;
+      // Poza startowa S (lezaca) i koncowa F (stojaca) w ukladzie LOKALNYM modelu.
+      const sY = finalLanding.offsetY ?? 0;
+      const sZ = centeredZ + (finalLanding.offsetZ ?? 0);
+      const fY = (TUNE.columnSettleY ?? 0) + (TUNE.finalNudgeY ?? 0);
+      const fZ = centeredZ + (TUNE.finalNudgeZ ?? 0);
+      // Zawias H: jedyny punkt, wokol ktorego obrot o DOKLADNIE 90 stopni
+      // przenosi S na F (rozwiazanie ukladu F-H = R90*(S-H)).
+      const hY = (fY - fZ + sZ + sY) / 2;
+      const hZ = (fY + fZ + sZ - sY) / 2;
+      const relY = sY - hY;
+      const relZ = sZ - hZ;
+      const cosT = Math.cos(theta);
+      const sinT = Math.sin(theta);
+      root.rotation.x = theta;
+      root.position.y = hY + relY * cosT - relZ * sinT;
+      root.position.z = hZ + relY * sinT + relZ * cosT;
+      const tiltGap = (TUNE.halfGapX ?? 0) * (isFirstModule ? 0.5 : -0.5);
+      const tiltOutward = Math.sign(root.userData.finalX) || 1;
+      root.position.x = THREE.MathUtils.lerp(
+        root.userData.startX + (finalLanding.offsetX ?? 0),
+        root.userData.finalX + tiltGap + tiltOutward * (TUNE.finalNudgeX ?? 0),
+        tiltProgress,
+      );
+      // Zawias w ukladzie lokalnym -> placeHalf przelicza na swiat dla stolu.
+      group.userData.tiltHingeLocal = { y: hY, z: hZ };
+      return;
+    }
+
     const liftProgress = smoothInOut((fr.finalize - 0.1) / 0.35);
     const joinProgress = smoothInOut((fr.finalize - 0.5) / 0.25);
     // Druga polowa konczy dojazd w bok przed rozpoczeciem opuszczania. Wczesniej
@@ -2453,6 +2540,157 @@ function updateTwoPartLockerModel(
     parts.roofs.forEach((r) => { r.visible = showFinishing; });
     parts.roofFascias.forEach((f) => { f.visible = showFinishing; });
   }
+}
+
+// =====================================================================
+// === ETAP 0 STATYCZNY: STOL PODMONTAZU KORYT =========================
+// =====================================================================
+
+// Stol warsztatowy podmontazu koryt (etap 0 poza rolotokiem). Blat na
+// wysokosci rolek rolotoku (TUNE.staticFirstStage.table.topY), zeby koryto
+// lezalo na tej samej wysokosci co pozniej na tasmie. Wysrodkowany w (0,0,0),
+// dluga osia wzdluz linii (Z) - pozycje ustawia wywolujacy.
+function createWorkTable(cfg = {}) {
+  const width = cfg.width ?? 3.4;
+  const depth = cfg.depth ?? 6.0;
+  const topY = cfg.topY ?? CONVEYOR_SURFACE_Y;
+  const group = new THREE.Group();
+  group.name = 'staticStageTable';
+  const frameMaterial = makeMaterial('#1f2937', 0.55, 0.35);
+  const topMaterial = makeMaterial(cfg.color ?? '#cbd5e1', 0.45, 0.25);
+  const topThickness = 0.12;
+
+  const top = new THREE.Mesh(new THREE.BoxGeometry(width, topThickness, depth), topMaterial);
+  top.position.y = topY - topThickness / 2;
+  top.castShadow = true;
+  top.receiveShadow = true;
+  top.name = 'tableTop';
+  group.add(top);
+
+  // Rama pod blatem (fartuch) usztywniajaca konstrukcje.
+  const apron = new THREE.Mesh(
+    new THREE.BoxGeometry(width - 0.24, 0.16, depth - 0.24),
+    frameMaterial,
+  );
+  apron.position.y = topY - topThickness - 0.08;
+  apron.castShadow = true;
+  group.add(apron);
+
+  // 6 nog (naroza + para na srodku dlugosci - stol jest dlugi jak koryto).
+  const legHeight = topY - topThickness;
+  const legX = width / 2 - 0.18;
+  [-depth / 2 + 0.24, 0, depth / 2 - 0.24].forEach((z, rowIndex) => {
+    [-legX, legX].forEach((x, sideIndex) => {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.14, legHeight, 0.14), frameMaterial);
+      leg.position.set(x, legHeight / 2, z);
+      leg.castShadow = true;
+      leg.name = `tableLeg-${rowIndex + 1}-${sideIndex + 1}`;
+      group.add(leg);
+    });
+  });
+
+  // Dolna polka na narzedzia/komponenty.
+  const shelf = new THREE.Mesh(
+    new THREE.BoxGeometry(width - 0.5, 0.06, depth - 0.6),
+    frameMaterial,
+  );
+  shelf.position.y = 0.35;
+  shelf.receiveShadow = true;
+  group.add(shelf);
+
+  return group;
+}
+
+// =====================================================================
+// === ETAP 3: STOL UCHYLNY / WYWROTNICA ===============================
+// =====================================================================
+
+// Stol uchylny stawiajacy czesc do pionu (etap 3). Zwraca { group, pivot }:
+// group stoi W ZAWIASIE (pozycje/kierunek ustawia wywolujacy), pivot to
+// obracana czesc (blat + ramiona + os) - petla renderu krec1 pivot.rotation.x
+// od 0 do PI/2 zsynchronizowane z czescia. Uklad lokalny: -z = w strone
+// rolotoku (blat lezy za zawiasem), +y = gora. Zawias przy podlodze.
+function createTiltTableRig({ width, thickness, slabMinZ, slabTopY, hingeY = 0.4 }) {
+  const group = new THREE.Group();
+  group.name = 'tiltTableRig';
+  const frameMaterial = makeMaterial('#1f2937', 0.55, 0.35);
+  const slabMaterial = makeMaterial('#b7c1cb', 0.42, 0.3);
+  const accentMaterial = makeMaterial('#b45309', 0.5, 0.25);
+
+  const pivot = new THREE.Group();
+  pivot.name = 'tiltTablePivot';
+  group.add(pivot);
+
+  // Os zawiasu (walec w poprzek linii).
+  const axle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.09, 0.09, width + 0.3, 18),
+    frameMaterial,
+  );
+  axle.rotation.z = Math.PI / 2;
+  axle.castShadow = true;
+  pivot.add(axle);
+
+  // Blat: od zawiasu wstecz (w strone rolotoku), gorne lico na slabTopY.
+  const slabMaxZ = 0.12;
+  const slabLength = Math.max(slabMaxZ - slabMinZ, 1);
+  const slab = new THREE.Mesh(
+    new THREE.BoxGeometry(width, thickness, slabLength),
+    slabMaterial,
+  );
+  slab.position.set(0, slabTopY - thickness / 2, (slabMinZ + slabMaxZ) / 2);
+  slab.castShadow = true;
+  slab.receiveShadow = true;
+  slab.name = 'tiltTableSlab';
+  pivot.add(slab);
+
+  // Ramiona laczace blat z zawiasem (po obu stronach).
+  const armX = width / 2 - 0.16;
+  [-armX, armX].forEach((x, index) => {
+    pivot.add(makeProfileBetween(
+      new THREE.Vector3(x, 0, 0),
+      new THREE.Vector3(x, slabTopY - thickness, slabMinZ * 0.35),
+      0.14,
+      0.12,
+      frameMaterial,
+      `tiltTableArm-${index + 1}`,
+    ));
+  });
+
+  // Pas ostrzegawczy na krawedzi blatu od strony rolotoku.
+  const edgeStripe = new THREE.Mesh(
+    new THREE.BoxGeometry(width, thickness + 0.02, 0.16),
+    accentMaterial,
+  );
+  edgeStripe.position.set(0, slabTopY - thickness / 2, slabMinZ + 0.08);
+  pivot.add(edgeStripe);
+
+  // Statyczny cokol zawiasu (nie obraca sie): wsporniki lozysk od zawiasu
+  // do podlogi (hingeY = wysokosc zawiasu nad podloga) + stopy.
+  const pedestal = new THREE.Group();
+  pedestal.name = 'tiltTablePedestal';
+  const bearingHeight = Math.max(hingeY, 0.12);
+  [-1, 1].forEach((side, index) => {
+    const x = side * (width / 2 + 0.18);
+    const bearing = new THREE.Mesh(
+      new THREE.BoxGeometry(0.26, bearingHeight, 0.26),
+      frameMaterial,
+    );
+    bearing.name = `tiltTableBearing-${index + 1}`;
+    bearing.position.set(x, -bearingHeight / 2, 0);
+    bearing.castShadow = true;
+    pedestal.add(bearing);
+
+    const foot = new THREE.Mesh(
+      new THREE.BoxGeometry(0.44, 0.05, 0.44),
+      frameMaterial,
+    );
+    foot.position.set(x, -bearingHeight + 0.025, 0);
+    pedestal.add(foot);
+  });
+  group.add(pedestal);
+  group.userData.pedestal = pedestal;
+
+  return { group, pivot, pedestal };
 }
 
 // =====================================================================
@@ -2678,12 +2916,20 @@ function ThreeProductionScene({
     // petli renderu przy animacji palet. Pusta tablica = offline wylaczony.
     let offlineStationVecs = [];
     let endPalletStandby = null;
+    // === Stol uchylny (wywrotnica, etap 3) ===
+    // tiltTableRig = { group, pivot }: group stoi w zawiasie (pozycja+kierunek),
+    // pivot to obracana czesc (blat+ramiona). Zbudowany w rebuildStatic z
+    // analitycznego zawiasu; placeHalf nadpisuje pozycje dokladnym zawiasem
+    // czesci (tiltTableHingeWorld), gdy jakas polowa jest na etapie 3.
+    let tiltTableRig = null;
+    let tiltTableHingeWorld = null;
 
     const rebuildStatic = () => {
       staticGroup.clear();
       rollers.length = 0;
       stationWorkers.length = 0;
       endPalletStandby = null;
+      tiltTableRig = null;
       routePoints = buildLinePoints(latestRef.current.stages.length);
       const rollerMaterial = makeMaterial(ROLLER_COLOR, 0.38, 0.58);
       // Rolki w strefie bufora (przelot) - inny, jasnoszary kolor dla wyroznienia.
@@ -2882,6 +3128,15 @@ function ThreeProductionScene({
           if (off.showEndPallet ?? true) {
             const endPallet = createPalletPlaceholder(off.pallet ?? {});
             const endPos = getEndPalletVector(routePoints);
+            // Wywrotnica: paleta czeka juz PRZESUNIETA pod gniazdo pierwszej
+            // polowy (ten sam shift co placeHalf), zeby nie skakala przy
+            // przejeciu przez carrier w chwili przyjazdu czesci na stol.
+            if (TUNE.tiltTable?.enabled ?? false) {
+              const fwd = getRouteTangent(routePoints, routePoints.length - 1);
+              const rightDir = new THREE.Vector3(fwd.z, 0, -fwd.x);
+              const firstFinalX = stageOneTemplates?.moduleCenterX?.[0] ?? 1.02;
+              endPos.addScaledVector(rightDir, -firstFinalX * MODEL_RENDER_SCALE);
+            }
             endPallet.position.set(endPos.x, 0, endPos.z);
             endPalletStandby = endPallet;
             staticGroup.add(endPallet);
@@ -2895,8 +3150,72 @@ function ThreeProductionScene({
         const first = routePoints[0];
         const last = routePoints[routePoints.length - 1];
         const direction = getRouteTangent(routePoints, 0);
-        const conveyorStart = first.clone().addScaledVector(direction, -entryExtension);
-        const conveyorEnd = last.clone().addScaledVector(direction, exitExtension);
+        // Etap 0 statyczny: rolotok NIE obejmuje stacji podmontazu koryt -
+        // zaczyna sie dopiero conveyorLeadIn przed etapem 1. W miejscu etapu 0
+        // stoi stol warsztatowy (podmontaz odbywa sie w miejscu, bez jazdy).
+        const sfs = TUNE.staticFirstStage ?? {};
+        const staticFirst = (sfs.enabled ?? false) && routePoints.length >= 2;
+        const conveyorStart = staticFirst
+          ? routePoints[1].clone().addScaledVector(direction, -(sfs.conveyorLeadIn ?? 7))
+          : first.clone().addScaledVector(direction, -entryExtension);
+        // Wywrotnica (etap 3): rolotok konczy sie PRZED ostatnia stacja -
+        // czesc zsuwa sie z ostatnich rolek na stol uchylny.
+        const tiltCfg = TUNE.tiltTable ?? {};
+        const tiltOn = (tiltCfg.enabled ?? false)
+          && isOfflineEnabled(latestRef.current.stages.length)
+          && (TUNE.offline?.enabled ?? false);
+        const conveyorEnd = tiltOn
+          ? last.clone().addScaledVector(direction, -(tiltCfg.conveyorCut ?? 3.2))
+          : last.clone().addScaledVector(direction, exitExtension);
+
+        if (staticFirst) {
+          const table = createWorkTable(sfs.table ?? {});
+          table.position.set(first.x, 0, first.z);
+          table.rotation.y = Math.atan2(direction.x, direction.z);
+          staticGroup.add(table);
+        }
+
+        if (tiltOn) {
+          // === Analityczny zawias wywrotnicy (te same wzory co sciezka czesci
+          // w updateTwoPartLockerModel - stol i czesc obracaja sie razem). ===
+          const off = TUNE.offline ?? {};
+          const modelOffset = off.modelOffset ?? [0, 0, 0];
+          const targetWorldY = (off.modelY ?? 0.42) + (modelOffset[1] ?? 0);
+          const startWorldY = MODEL_LINE_Y + (TUNE.horizontalLift ?? 0.34);
+          const endGround = getEndPalletVector(routePoints);
+          // Srodek podstawy w ukladzie lokalnym modelu: zmierzony przy ladowaniu
+          // GLB (baseAnchorLocal) albo pozycja konstrukcyjna podstawy.
+          const anchorZ = stageOneTemplates?.baseAnchorLocal?.z ?? ASSEMBLY_HALF_LENGTH;
+          const landingGroundOnLine = endGround.clone()
+            .addScaledVector(direction, (modelOffset[2] ?? 0) - anchorZ * MODEL_RENDER_SCALE);
+          const centeredZ = ASSEMBLY_HALF_LENGTH;
+          const sY = (startWorldY - targetWorldY) / MODEL_RENDER_SCALE;
+          const sZ = centeredZ
+            + last.clone().sub(landingGroundOnLine).dot(direction) / MODEL_RENDER_SCALE;
+          const fY = (TUNE.columnSettleY ?? 0) + (TUNE.finalNudgeY ?? 0);
+          const fZ = centeredZ + (TUNE.finalNudgeZ ?? 0);
+          const hY = (fY - fZ + sZ + sY) / 2;
+          const hZ = (fY + fZ + sZ - sY) / 2;
+          const hingeNudge = tiltCfg.hingeNudge ?? [0, 0];
+          const hingeWorld = landingGroundOnLine.clone()
+            .addScaledVector(direction, hZ * MODEL_RENDER_SCALE + (hingeNudge[1] ?? 0));
+          hingeWorld.x = last.x;
+          hingeWorld.y = targetWorldY + hY * MODEL_RENDER_SCALE + (hingeNudge[0] ?? 0);
+          // Blat siega od zawiasu wstecz az za lezaca czesc (z zapasem).
+          const partHalf = (ASSEMBLY_LENGTH * MODEL_RENDER_SCALE) / 2;
+          const stationOffset = last.clone().sub(hingeWorld).dot(direction); // < 0
+          const slabMinZ = stationOffset - partHalf - (tiltCfg.table?.extraLength ?? 0.5);
+          tiltTableRig = createTiltTableRig({
+            width: tiltCfg.table?.width ?? 3.4,
+            thickness: tiltCfg.table?.thickness ?? 0.16,
+            slabMinZ,
+            slabTopY: CONVEYOR_SURFACE_Y - hingeWorld.y,
+            hingeY: hingeWorld.y,
+          });
+          tiltTableRig.group.position.copy(hingeWorld);
+          tiltTableRig.group.rotation.y = Math.atan2(direction.x, direction.z);
+          staticGroup.add(tiltTableRig.group);
+        }
         const length = Math.max(conveyorStart.distanceTo(conveyorEnd), 0.1);
         const midpoint = conveyorStart.clone().add(conveyorEnd).multiplyScalar(0.5);
         const conveyor = new THREE.Group();
@@ -3187,6 +3506,21 @@ function ThreeProductionScene({
       if (Number.isFinite(measuredPartLength) && measuredPartLength > 0) {
         onAssemblyMetrics?.({ partLength: measuredPartLength });
       }
+      // Srodek podstawy w ukladzie LOKALNYM modelu - uzywany przez analityczny
+      // zawias wywrotnicy (rebuildStatic) zanim jakikolwiek model trafi na
+      // etap 3. Te same liczby co palletAnchorLocalXZ liczone w placeHalf.
+      {
+        const anchorBox = new THREE.Box3();
+        [measurementModel.userData.parts.base, measurementModel.userData.parts.baseFront]
+          .filter(Boolean)
+          .forEach((part) => anchorBox.expandByObject(part));
+        if (!anchorBox.isEmpty()) {
+          const centerLocal = measurementModel.worldToLocal(
+            anchorBox.getCenter(new THREE.Vector3()),
+          );
+          stageOneTemplates.baseAnchorLocal = { x: centerLocal.x, z: centerLocal.z };
+        }
+      }
       measurementModel.traverse((object) => {
         if (!object.isMesh || !object.material) return;
         const materials = Array.isArray(object.material) ? object.material : [object.material];
@@ -3359,33 +3693,108 @@ function ThreeProductionScene({
           const anchorWorldOffset = new THREE.Vector3(anchorLocal.x, 0, anchorLocal.z)
             .multiplyScalar(MODEL_RENDER_SCALE)
             .applyEuler(new THREE.Euler(0, angle, 0));
+          // === PRZESUW PALETY (stol uchylny, TUNE.tiltTable) ===
+          // Obie polowy spadaja ze stolu w TO SAMO miejsce (os linii), wiec
+          // paleta z podstawa podjezdza W BOK tak, by wlasciwe gniazdo bylo pod
+          // stolem: dla 1. polowy stoi na -finalX0, w oknie settle drugiej
+          // polowy przesuwa sie na -finalX1, a po wlozeniu OBU wraca plynnie
+          // na os linii (odjazd na etap 4 startuje jak dotad, bez skoku).
+          const tiltCfg = TUNE.tiltTable ?? {};
+          const tiltOn = (tiltCfg.enabled ?? false);
+          let palletShift = 0;
+          if (tiltOn) {
+            const rootsFX = model.userData.parts.moduleRoots.map(
+              (r) => r.userData.finalX ?? 0,
+            );
+            const shiftForLead = -(rootsFX[0] ?? 0) * MODEL_RENDER_SCALE;
+            const shiftForTrail = -(rootsFX[1] ?? 0) * MODEL_RENDER_SCALE;
+            const tiltStart = tiltCfg.settlePortion ?? 0.15;
+            const tiltEnd = tiltStart + (tiltCfg.tiltPortion ?? 0.55);
+            const trailAtFinal = trailUnit
+              && trailUnit.currentIndex === finalizeIdxNow
+              && (trailUnit.mode === 'assembly' || trailUnit.mode === 'completed');
+            if (!trailAtFinal) {
+              palletShift = shiftForLead;
+            } else {
+              const trailF = THREE.MathUtils.clamp(
+                (trailUnit.assemblyProgress ?? trailUnit.progress ?? 0) / 100,
+                0,
+                1,
+              );
+              if (trailF < tiltStart) {
+                palletShift = THREE.MathUtils.lerp(
+                  shiftForLead,
+                  shiftForTrail,
+                  easeInOut(trailF / Math.max(tiltStart, 0.01)),
+                );
+              } else if (trailF < tiltEnd) {
+                palletShift = shiftForTrail;
+              } else {
+                palletShift = THREE.MathUtils.lerp(
+                  shiftForTrail,
+                  0,
+                  easeInOut((trailF - tiltEnd) / Math.max(1 - tiltEnd, 0.01)),
+                );
+              }
+            }
+          }
           // Ten sam cel co centerWorldModelsOnPallet: srodek palety + reczne
           // strojenie modelOffset (x/z).
           const landingGround = endGround.clone()
-            .addScaledVector(right, modelOffset[0] ?? 0)
+            .addScaledVector(right, (modelOffset[0] ?? 0) + palletShift)
             .addScaledVector(forward, modelOffset[2] ?? 0)
             .sub(anchorWorldOffset);
           const deltaFromPallet = pose.position.clone().sub(landingGround);
           finalLanding = {
             enabled: true,
+            tilt: tiltOn,
             offsetX: deltaFromPallet.dot(right) / MODEL_RENDER_SCALE,
             offsetY: (startWorldY - targetWorldY) / MODEL_RENDER_SCALE,
             offsetZ: deltaFromPallet.dot(forward) / MODEL_RENDER_SCALE,
             arcLift: (off.landingLift ?? 0.72) / MODEL_RENDER_SCALE,
           };
-          palletLandingWorld = endGround.clone();
+          palletLandingWorld = endGround.clone().addScaledVector(right, palletShift);
           palletLandingAngle = angle;
-          if (halfMode === 'lead') showEndPalletForUnit(poseUnit);
+          if (halfMode === 'lead') showEndPalletForUnit(poseUnit, palletLandingWorld);
           model.position.set(landingGround.x, targetWorldY, landingGround.z);
           model.rotation.y = angle;
+          // Zawias stolu w SWIECIE dla animacji wywrotnicy w petli renderu.
+          // (x = os linii - stol NIE przesuwa sie z paleta; y/z niezalezne od
+          // przesuwu, bo palletShift dziala tylko wzdluz 'right'.)
+          if (tiltOn) {
+            const hingeLocal = model.userData.parts?.moduleRoots
+              ? model.userData.tiltHingeLocal
+              : null;
+            if (hingeLocal) {
+              tiltTableHingeWorld = new THREE.Vector3(
+                pose.position.x,
+                targetWorldY + hingeLocal.y * MODEL_RENDER_SCALE,
+                landingGround.z + hingeLocal.z * MODEL_RENDER_SCALE,
+              );
+            }
+          }
         } else {
           model.position.copy(pose.position);
           model.position.y = isHorizontalAssembly
             ? MODEL_LINE_Y + conveyorLift
             : MODEL_LINE_Y + conveyorLift + Math.sin(time * 2 + poseUnit.number) * 0.018;
+          // Etap 0 statyczny: podczas wjazdu koryto OPADA na stol (zamiast
+          // wjezdzac tasma) - jakby pracownik odkladal je na blat.
+          if (poseUnit.mode === 'entry' && (TUNE.staticFirstStage?.enabled ?? false)) {
+            const dropProgress = easeOut(THREE.MathUtils.clamp(
+              (poseUnit.travelProgress ?? 0) / 100,
+              0,
+              1,
+            ));
+            model.position.y += (TUNE.staticFirstStage?.dropInHeight ?? 0.5) * (1 - dropProgress);
+          }
         }
 
-        if (halfMode === 'trail' && (isApproachingStandingStage || isStandingStage)) {
+        // Boczne omijanie drugiej polowy jest potrzebne TYLKO w starym trybie
+        // (obie polowy pionuja na tej samej stacji). Z wywrotnica druga polowa
+        // jedzie prosto na stol (pierwsza stoi juz dalej, na palecie za zawiasem).
+        if (halfMode === 'trail' && !(TUNE.tiltTable?.enabled ?? false)
+          && (isApproachingStandingStage || isStandingStage)) {
           let sideClearance;
           if (isApproachingStandingStage) {
             // Zjedz na boczny tor JESZCZE W CZASIE DOJAZDU. Na koncu przejazdu
@@ -3466,10 +3875,11 @@ function ThreeProductionScene({
         assembly.pallet.rotation.set(0, 0, 0);
       };
 
-      const showEndPalletForUnit = (unit) => {
+      const showEndPalletForUnit = (unit, groundOverride = null) => {
         if (!(TUNE.offline?.showEndPallet ?? true) || !routePoints.length) return;
         const off = TUNE.offline ?? {};
-        const endGround = getEndPalletVector(routePoints);
+        // groundOverride = pozycja z uwzglednionym przesuwem palety (wywrotnica).
+        const endGround = groundOverride ?? getEndPalletVector(routePoints);
         const forward = getRouteTangent(routePoints, routePoints.length - 1);
         const angle = Math.atan2(forward.x, forward.z);
         const assembly = ensurePalletAssembly(unit.key, off);
@@ -3614,6 +4024,44 @@ function ThreeProductionScene({
           assembly.trail.visible = false;
         }
       });
+
+      // === Animacja wywrotnicy (etap 3): stol obraca sie razem z czescia. ===
+      // Kat = max po polowach bedacych na etapie 3: podnoszenie w oknie tilt,
+      // powrot pustego stolu w oknie return (czesc stoi juz w podstawie).
+      if (tiltTableRig) {
+        const tiltCfg = TUNE.tiltTable ?? {};
+        const tiltStart = tiltCfg.settlePortion ?? 0.15;
+        const tiltSpan = Math.max(tiltCfg.tiltPortion ?? 0.55, 0.05);
+        const tiltEnd = tiltStart + tiltSpan;
+        const returnSpan = Math.max(tiltCfg.returnPortion ?? 0.25, 0.05);
+        const angleFor = (fraction) => {
+          if (fraction <= tiltStart) return 0;
+          if (fraction < tiltEnd) {
+            return Math.PI * 0.5 * easeInOut((fraction - tiltStart) / tiltSpan);
+          }
+          return Math.PI * 0.5
+            * (1 - easeInOut(Math.min((fraction - tiltEnd) / returnSpan, 1)));
+        };
+        let tableAngle = 0;
+        const collectAngle = (unit) => {
+          if (!unit || unit.currentIndex !== finalizeIdxNow) return;
+          if (unit.mode !== 'assembly' && unit.mode !== 'completed') return;
+          const fraction = THREE.MathUtils.clamp(
+            (unit.assemblyProgress ?? unit.progress ?? 0) / 100,
+            0,
+            1,
+          );
+          tableAngle = Math.max(tableAngle, angleFor(fraction));
+        };
+        latestRef.current.visibleUnits.forEach(collectAngle);
+        (latestRef.current.trailUnits ?? []).forEach(collectAngle);
+        tiltTableRig.pivot.rotation.x = tableAngle;
+        // Dokladny zawias czesci (z placeHalf) nadpisuje analityczny - stol
+        // i czesc obracaja sie wokol identycznego punktu.
+        if (tiltTableHingeWorld) {
+          tiltTableRig.group.position.copy(tiltTableHingeWorld);
+        }
+      }
       renderer.domElement.dataset.scheduleConflicts = String(
         latestRef.current.scheduleConflictCount ?? 0,
       );

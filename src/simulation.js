@@ -234,10 +234,61 @@ export const TUNE = {
     untilStage: 1,  // etapy <= tego sa zageszczone (1 = etapy 0,1 blizej siebie)
     spacing: 11,    // odstep miedzy wczesnymi etapami (pelny stationSpacing = 20)
   },
+  // === ETAP 0 STATYCZNY (podmontaz koryt NA STOLE, poza rolotokiem) ===
+  // Wg planu hali podmontaz koryt to statyczne stanowisko - rolotok zaczyna sie
+  // dopiero od montazu pionow (etap 1). Stol stoi w miejscu stacji etapu 0.
+  // Koryto POJAWIA SIE na stole (bez tasmy wejsciowej), sklada sie W MIEJSCU,
+  // a po podmontazu znika ze stolu i pojawia sie na poczatku skroconego
+  // rolotoku, skad normalnie dojezdza do etapu 1. Harmonogram/czasy bez zmian -
+  // "przejazd 0->1" to teraz czas przeniesienia na linie + dojazd.
+  staticFirstStage: {
+    enabled: true,
+    // Wymiary stolu warsztatowego (swiat). topY = wysokosc blatu, domyslnie
+    // rowna wysokosci rolek rolotoku, zeby koryto lezalo na tej samej wysokosci.
+    table: { width: 3.4, depth: 6.0, topY: 1.85 },
+    // Ile rolotoku (swiat) jest PRZED stacja etapu 1 - odcinek dojazdowy.
+    // Rolotok zaczyna sie w [pozycja etapu 1] - conveyorLeadIn.
+    conveyorLeadIn: 7,
+    // O ile (swiat) W GLAB rolotoku od jego poczatku pojawia sie czesc po
+    // zdjeciu ze stolu (zeby nie wystawala przed pierwsza rolke).
+    appearInset: 2.8,
+    // Czesc czasu przejazdu 0->1 spedzana jeszcze NA STOLE (zdejmowanie),
+    // zanim czesc pojawi sie na rolotoku. 0.35 = 35% czasu przejazdu.
+    transferPortion: 0.35,
+    // Wysokosc, z jakiej koryto "opada" na stol przy pojawianiu sie (wjazd).
+    dropInHeight: 0.5,
+  },
   // Precyzyjne przesuniecie POJEDYNCZEJ stacji wzdluz linii (swiat, +z = w strone
   // finalnego). Indeks = etap. Nie zmienia czasow ani bufora, tylko pozycje stacji
   // (strefa montazowa + pracownicy). Tu: Montaz drzwi (E2) odsuniety od strefy Drzwi.
   stationNudge: [0, 0, 6, 0],
+  // === ETAP 3: STOL UCHYLNY / WYWROTNICA (stawianie do pionu) ===
+  // Wg planu hali ("Stol do zmiany orientacji pionow") czesc zjezdza z rolotoku
+  // na stol uchylny dopchniety do konca tasmy. Stawianie do pionu = obrot
+  // CALEGO STOLU o 90 stopni wokol zawiasu przy podlodze (od strony palety),
+  // przez co czesc idealnie wpada do podstawy stojacej na palecie za stolem.
+  // Dla drugiej polowy paleta przesuwa sie LEKKO w bok (drugie gniazdo
+  // podstawy trafia pod stol), a po wlozeniu obu wraca na os linii.
+  // Harmonogram/czasy bez zmian - to czysto wizualna mechanika etapu 3.
+  tiltTable: {
+    enabled: true,
+    // Podzial czasu etapu 3 (frakcje 0-1):
+    settlePortion: 0.15,  // lezenie na stole przed obrotem (i okno przesuwu palety)
+    tiltPortion: 0.55,    // obrot stolu 0 -> 90 stopni (wlozenie w podstawe)
+    returnPortion: 0.25,  // powrot PUSTEGO stolu do poziomu (po zwolnieniu czesci)
+    // O ile (swiat) rolotok konczy sie PRZED stacja etapu 3 - robi miejsce na
+    // stol (czesc zsuwa sie z ostatnich rolek prosto na blat).
+    conveyorCut: 3.2,
+    // Wyglad stolu uchylnego.
+    table: {
+      width: 3.4,        // szerokosc blatu w poprzek linii
+      thickness: 0.16,   // grubosc blatu
+      extraLength: 0.5,  // zapas dlugosci blatu poza obrys lezacej czesci
+    },
+    // Reczna korekta pozycji zawiasu [y, z] (swiat) - tylko wyglad stolu,
+    // sciezka czesci liczona jest niezaleznie (zawsze trafia w podstawe).
+    hingeNudge: [0, 0],
+  },
   // === ETAP OFFLINE (wykonczenie POZA rolotokiem: nitowanie + dach) ===
   // Ostatni etap nie jest stacja na rolotoku, tylko N rownoleglych, identycznych
   // stanowisk obok konca tasmy. Paleta z calym (sparowanym) paczkomatem zjezdza
