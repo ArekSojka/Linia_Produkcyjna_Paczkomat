@@ -80,7 +80,7 @@ export const TUNE = {
   canopyOffset: [0, 0.1, 0.9],
   // Docelowa wysokosc (Y) sciany tylniej. Ujemne = nizej (na DOLE / z TYLU).
   // Sciana jest automatycznie sprowadzana w dol na ta wysokosc i wjezdza od dolu.
-  backWallY: -0.85,
+  backWallY: -0.76,
   // O ile gleboko pod spodem startuje sciana tylnia (montaz "od dolu").
   backWallDrop: 1.0,
   // Obrot sciany tylniej (radiany) - byla "do gory nogami", wiec domyslnie PI
@@ -120,9 +120,9 @@ export const TUNE = {
   columnSettleY: 0,
   // === KOREKTA POZYCJI FINALNEJ (czesci na podstawie) — strojenie milimetrowe ===
   // Dziala dopiero gdy polowy stoja na podstawie. Male wartosci, np. -0.02.
-  finalNudgeX: 0,  // bok (X): + na zewnatrz, - do srodka
-  finalNudgeZ: 0.09,  // wzdluz podstawy (Z): + do przodu, - do tylu
-  finalNudgeY: 0.08,  // gora/dol (Y)
+  finalNudgeX: 0.01,  // bok (X): + na zewnatrz, - do srodka
+  finalNudgeZ: -0.08,  // wzdluz podstawy (Z): + do przodu, - do tylu
+  finalNudgeY: 0.06,  // gora/dol (Y)
   // Przeswit drugiej polowy podczas dojazdu nad podstawe. Najpierw konczy ona
   // ruch w bok, a dopiero potem lagodnie opada na docelowa wysokosc. Zapobiega
   // to przenikaniu kolumny przez geometrie podstawy w trakcie laczenia.
@@ -142,7 +142,7 @@ export const TUNE = {
   // === POLKI (GLB polka.glb) ===
   shelfScale: 1,            // skala polki (gdy za duza/mala)
   shelfRotX: 0,   // obrot polki, by lezala plasko w poprzek kolumny
-  shelfOffset: [0, 0, 0],   // drobne przesuniecie polki [x, y, z]
+  shelfOffset: [0, 0.045, 0],   // drobne przesuniecie polki [x, y, z]
   // === DRZWI (GLB - 4 rozmiary) ===
   doorType: 'l',            // ktory rozmiar: 'xl' | 'l' | 's' | 'xs'
   doorScale: 0.95,             // skala drzwi
@@ -160,8 +160,17 @@ export const TUNE = {
   // === SIATKA SKRYTEK (drzwi + polki) ===
   // Poczatek (Z) pierwszego rzedu skrytek i odstep miedzy rzedami. Zwieksz
   // odstep / przesun start, gdy skrytki nie wypelniaja kolumny (szpara u gory).
-  cellRowStart: -2,
+  // UWAGA KIERUNKU: strona +Z to DOL stojacej kolumny (ta wchodzi w podstawe),
+  // strona -Z to GORA. 11 skrytek z zamkami wypelnia GORNE 4.4 ramy
+  // (rowZ: -2.2..1.8; gora rowno z krawedzia -2.4), a dolne 0.4 (rowZ 1.8..2.4)
+  // zajmuje plaska DOLNA polka (baseShelf) BEZ zamka i drzwi - dzieki temu dol
+  // kolumny jest plaski, rowny z krawedzia i czysto siada na podstawie.
+  cellRowStart: -2.2,
   cellRowSpacing: 0.4,
+  // Przesuniecie (Z) plaskiej dolnej polki wzgledem jej domyslnej pozycji
+  // (jeden rzad PONIZEJ ostatniej skrytki, przy dolnej krawedzi). + = nizej
+  // (blizej podstawy), - = wyzej. Reguluj, gdy nie jest idealnie rowno z dolem.
+  baseShelfNudgeZ: 0,
   // === KAMERA (OrbitControls) — katy i zakres zoomu ===
   camera: {
     minDistance: 5,                 // jak blisko mozna dojechac (zoom in)
@@ -193,7 +202,9 @@ export const TUNE = {
   // === PODSTAWA ===
   // Obrot i drobny offset modelu podstawy. Trafia tez do pomiaru wysokosci, wiec
   // zmiana tu naprawia jednoczesnie render i osadzenie na palecie.
-  baseRot: [Math.PI / 2, 0, 0],
+  // Skladowa Z = obrot W POZIOMIE (wokol pionu swiata, po bazowym rotX 90):
+  // PI = przerzucenie przodu/tylu podstawy o 180 stopni.
+  baseRot: [Math.PI / 2, 0, Math.PI],
   baseOffset: [0, 0, 0],
   // === SCIANY BOCZNE ===
   // Obrot POJEDYNCZEJ sciany [rotX, rotY, rotZ] w radianach. Klucz "modul-faza"
@@ -368,32 +379,52 @@ export const TUNE = {
 };
 // =====================================================================
 
-// Czy ostatni etap jest etapem OFFLINE (poza rolotokiem). Wymaga wlaczonego
-// TUNE.offline.enabled i co najmniej 2 etapow (musi byc co najmniej jedna
-// stacja rolotoku przed offline).
-export const isOfflineEnabled = (stageCount) =>
-  Boolean(TUNE.offline?.enabled) && stageCount >= 2;
+// Normalizacja argumentu "stages": przyjmujemy TABLICE etapow (preferowane -
+// pozwala wykryc etap offline po ikonie) albo sama LICZBE etapow (legacy;
+// wtedy zakladamy, ze ostatni etap MOZE byc offline, jak dotychczas).
+const stageInfo = (stagesOrCount) => {
+  if (Array.isArray(stagesOrCount)) {
+    return {
+      count: stagesOrCount.length,
+      lastIsOffline: stagesOrCount[stagesOrCount.length - 1]?.icon === 'offline',
+    };
+  }
+  return { count: Number(stagesOrCount) || 0, lastIsOffline: true };
+};
+
+// Czy ostatni etap jest etapem OFFLINE (poza rolotokiem). Sterowane IKONA
+// ostatniego etapu ('offline') - usuniecie etapu offline z listy automatycznie
+// wylacza cala mechanike (harmonogram, stanowiska, dojazd palety), a dodanie
+// etapu z ikona 'Wykonczenie poza linia' na koncu wlacza ja z powrotem.
+// Wymaga tez TUNE.offline.enabled i co najmniej 2 etapow.
+export const isOfflineEnabled = (stagesOrCount) => {
+  const { count, lastIsOffline } = stageInfo(stagesOrCount);
+  return Boolean(TUNE.offline?.enabled) && lastIsOffline && count >= 2;
+};
 
 // Liczba rownoleglych serwerow offline (>=1).
 export const getOfflineServerCount = () =>
   Math.max(1, Math.round(TUNE.offline?.stationCount ?? 1));
 
 // Indeks etapu offline (ostatni) albo -1, gdy offline wylaczony.
-export const getOfflineStageIndex = (stageCount) =>
-  isOfflineEnabled(stageCount) ? stageCount - 1 : -1;
+export const getOfflineStageIndex = (stagesOrCount) =>
+  isOfflineEnabled(stagesOrCount) ? stageInfo(stagesOrCount).count - 1 : -1;
 
 // Indeks OSTATNIEJ stacji NA ROLOTOKU. Gdy offline wlaczony, jest to etap przed
 // offline (tu para lead+trail laczy sie na podstawie palety). Gdy offline
 // wylaczony, jest to po prostu ostatni etap (stare zachowanie).
-export const getConveyorFinalIndex = (stageCount) =>
-  isOfflineEnabled(stageCount) ? stageCount - 2 : stageCount - 1;
+export const getConveyorFinalIndex = (stagesOrCount) =>
+  isOfflineEnabled(stagesOrCount)
+    ? stageInfo(stagesOrCount).count - 2
+    : stageInfo(stagesOrCount).count - 1;
 
-export const buildLinePoints = (count) => {
+export const buildLinePoints = (stagesOrCount) => {
+  const count = stageInfo(stagesOrCount).count;
   // Rozstaw stacji = dlugosc rolotoku. Wiekszy = dluzsza tasma i wieksze
   // odstepy miedzy czesciami (zeby nie nachodzily). Strojone przez TUNE.
   // UWAGA: etap offline (ostatni, gdy wlaczony) NIE jest stacja rolotoku, wiec
   // nie dostaje punktu na linii — punkty obejmuja tylko stacje rolotoku.
-  const conveyorCount = isOfflineEnabled(count) ? Math.max(count - 1, 1) : count;
+  const conveyorCount = isOfflineEnabled(stagesOrCount) ? Math.max(count - 1, 1) : count;
   const n = Math.max(conveyorCount, 1);
   const spacing = TUNE.stationSpacing ?? 7.6;
   const startZ = -((n - 1) * spacing) / 2;
@@ -417,8 +448,8 @@ export const buildLinePoints = (count) => {
   });
 };
 
-export const getTravelDurations = (stageCount) => {
-  const points = buildLinePoints(stageCount);
+export const getTravelDurations = (stagesOrCount) => {
+  const points = buildLinePoints(stagesOrCount);
 
   return points.slice(0, -1).map((point, index) => {
     const distance = point.distanceTo(points[index + 1]);
@@ -431,11 +462,11 @@ export const DEFAULT_TRAVEL_SECONDS = 2;
 // Domyslne czasy przejazdu kolejnych przejazdow ROLOTOKU: E0->E1, E1->E2, E2->E3.
 // (Dojazd palety na etap offline jest osobny: TUNE.offline.palletTravel.)
 export const DEFAULT_TRAVEL_TIMES = [3, 7, 3];
-export const getDefaultTravelTimes = (stageCount) =>
-  getTravelDurations(stageCount).map((_, index) => DEFAULT_TRAVEL_TIMES[index] ?? DEFAULT_TRAVEL_SECONDS);
+export const getDefaultTravelTimes = (stagesOrCount) =>
+  getTravelDurations(stagesOrCount).map((_, index) => DEFAULT_TRAVEL_TIMES[index] ?? DEFAULT_TRAVEL_SECONDS);
 
-export const normalizeTravelTimes = (travelTimes, stageCount) => {
-  const defaults = getDefaultTravelTimes(stageCount);
+export const normalizeTravelTimes = (travelTimes, stagesOrCount) => {
+  const defaults = getDefaultTravelTimes(stagesOrCount);
 
   return defaults.map((defaultTime, index) => Math.max(0.1, clampNumber(travelTimes[index], defaultTime)));
 };
@@ -448,11 +479,11 @@ export const buildProductionSchedule = (
 ) => {
   const stageCount = stages.length;
   const unitCount = Math.max(1, count);
-  const travelDurations = normalizeTravelTimes(travelTimes, stageCount);
+  const travelDurations = normalizeTravelTimes(travelTimes, stages);
 
   // --- Konfiguracja etapu OFFLINE (wykonczenie poza rolotokiem) ---
-  const offlineEnabled = isOfflineEnabled(stageCount);
-  const offlineStageIndex = getOfflineStageIndex(stageCount);
+  const offlineEnabled = isOfflineEnabled(stages);
+  const offlineStageIndex = getOfflineStageIndex(stages);
   const offlineServerCount = offlineEnabled ? getOfflineServerCount() : 0;
   const palletTravel = offlineEnabled ? Math.max(TUNE.offline?.palletTravel ?? 0, 0) : 0;
   // Przezbrojenie stanowiska offline = czas zjazdu gotowej palety zanim wjedzie
@@ -460,7 +491,7 @@ export const buildProductionSchedule = (
   // palet na stanowisku w trakcie animacji odjazdu.
   const offlineChangeover = offlineEnabled ? Math.max(TUNE.offline?.changeover ?? 0, 0) : 0;
   // Ostatnia stacja ROLOTOKU = tu para lead+trail laczy sie na podstawie palety.
-  const conveyorFinalIndex = getConveyorFinalIndex(stageCount);
+  const conveyorFinalIndex = getConveyorFinalIndex(stages);
 
   if (stageCount === 0) {
     return {
@@ -525,7 +556,7 @@ export const buildProductionSchedule = (
   // odjezdzajaca czesc FIZYCZNIE oddala sie od stacji o partMinimumGap - inaczej
   // (np. przy skroconym tightEarly) stacja "zwalnia sie" na papierze zanim
   // czesc naprawde zjedzie, i kolejna wjezdza prosto w nia (nakladanie sie).
-  const linePoints = buildLinePoints(stageCount);
+  const linePoints = buildLinePoints(stages);
   const segmentDistances = linePoints.slice(0, -1).map(
     (point, index) => point.distanceTo(linePoints[index + 1]),
   );

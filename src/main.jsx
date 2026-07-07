@@ -83,17 +83,10 @@ const baseStages = [
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 3: włożenie w podstawę',
+    name: 'Etap 3: włożenie w podstawę, nitowanie + dach',
     duration: DEFAULT_STAGE_SECONDS,
     color: '#7c3aed',
     icon: 'finalize',
-  },
-  {
-    id: crypto.randomUUID(),
-    name: 'Etap 4: nitowanie + dach (poza linią)',
-    duration: DEFAULT_STAGE_SECONDS,
-    color: '#db2777',
-    icon: 'offline',
   },
 ];
 
@@ -270,7 +263,6 @@ const LOCKS_PER_MODULE = CELLS_PER_HALF;
 const MODULE_COUNT = 2;
 const LOCK_COUNT = LOCKS_PER_MODULE * MODULE_COUNT;
 const LOCKER_COUNT = LOCK_COUNT;
-const SHELF_COUNT = LOCKS_PER_MODULE;
 
 const ASSEMBLY_HALF_LENGTH = ASSEMBLY_LENGTH / 2;
 const ASSEMBLY_ITEM_SPACING = 0.4;
@@ -552,6 +544,16 @@ const getVisibleUnitsFromSchedule = (schedule, elapsed, stageCount, lane = 'lead
       mode: isBlocked ? 'waiting' : isCompletedDisplay ? 'completed' : 'assembly',
       travelProgress: 0,
       isBlocked,
+      // Postep OKNA PREZENTACJI gotowego paczkomatu (0-1 miedzy koncem montazu
+      // a koncem segmentu). Steruje animacja ODJAZDU palety z gotowa para -
+      // zamiast znikac w miejscu, paleta odjezdza wzdluz linii.
+      completedProgress: isCompletedDisplay
+        ? Math.min(
+          (elapsed - segment.assemblyEnd)
+            / Math.max(segment.end - segment.assemblyEnd, 0.1),
+          1,
+        )
+        : 0,
     });
   });
 
@@ -785,8 +787,8 @@ function TravelTimeEditor({
 
   // Pokazujemy tylko przejazdy ROLOTOKU (miedzy stacjami na tasmie). Dojazd
   // palety na etap offline (poza linia) jest osobny (TUNE.offline.palletTravel).
-  const conveyorTravelCount = getConveyorFinalIndex(stages.length);
-  const offline = isOfflineEnabled(stages.length);
+  const conveyorTravelCount = getConveyorFinalIndex(stages);
+  const offline = isOfflineEnabled(stages);
 
   return (
     <div className="travel-editor">
@@ -839,8 +841,8 @@ function WorkersEditor({
 }) {
   if (!stages.length) return null;
 
-  const offlineStageIdx = getOfflineStageIndex(stages.length);
-  const offlineServerCount = isOfflineEnabled(stages.length) ? getOfflineServerCount() : 0;
+  const offlineStageIdx = getOfflineStageIndex(stages);
+  const offlineServerCount = isOfflineEnabled(stages) ? getOfflineServerCount() : 0;
 
   return (
     <div className="travel-editor">
@@ -1212,8 +1214,7 @@ const MAINLINE_SECTORS = [
   { label: 'Podmontaż koryt', minutes: null },
   { label: 'Montaż pionów', minutes: 15 },
   { label: 'Montaż drzwi', minutes: 12 },
-  { label: 'Włożenie w podstawę', minutes: 16 },
-  { label: 'Wykończenie (poza linią)', minutes: 16 },
+  { label: 'Włożenie w podstawę + nitowanie i dach', minutes: null },
 ];
 
 // Buduje jedna strefe robocza: plaski kolorowy pad + obrys + unoszaca etykieta
@@ -1659,6 +1660,7 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
   const sideWalls = [];
   const backWalls = [];
   const shelves = [];
+  const baseShelves = [];
   const lockerCells = [];
   const moduleStartX = 1.48;
   const moduleFinalX = 1.02;
@@ -1759,7 +1761,9 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
     lockPosePivots.push(lockPosePivot);
 
     for (let row = 0; row < LOCKS_PER_MODULE; row += 1) {
-      const rowZ = -2 + row * ASSEMBLY_ITEM_SPACING;
+      // Ten sam start co siatka skrytek (TUNE.cellRowStart) - zamek rzedu N
+      // musi lezec dokladnie tam, gdzie potem wjedzie skrytka N.
+      const rowZ = TUNE.cellRowStart + row * ASSEMBLY_ITEM_SPACING;
       const lock = stageOneTemplates?.lock
         ? applyGlbMaterial(cloneGlbComponent(stageOneTemplates.lock), 'lock')
         : new THREE.Group();
@@ -1977,6 +1981,33 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
       lockerCells.push(cell);
       content.add(cell);
     }
+
+    // === PLASKA DOLNA POLKA (baza kolumny) ===
+    // Zamiast 12. skrytki z zamkiem (ktora wystawala poza rame) DOL kolumny
+    // konczy sie plaska polka - identyczny model jak polki wewnatrz skrytek,
+    // tylko o jeden rzad PONIZEJ ostatniej skrytki (przy dolnej krawedzi ramy,
+    // po stronie +Z, ktora wchodzi w podstawe). Daje plaski, rowny z dolem
+    // spod, na ktorym kolumna czysto siada na podstawie. Bez zamka i drzwi.
+    const baseRowZ = TUNE.cellRowStart + LOCKS_PER_MODULE * TUNE.cellRowSpacing
+      + (TUNE.baseShelfNudgeZ ?? 0);
+    let baseShelf;
+    if (stageOneTemplates?.shelf) {
+      baseShelf = applyGlbMaterial(cloneGlbComponent(stageOneTemplates.shelf), 'shelf');
+      baseShelf.name = `glbBaseShelf-${moduleIndex + 1}`;
+      baseShelf.rotation.x = TUNE.shelfRotX;
+      baseShelf.scale.multiplyScalar(TUNE.shelfScale);
+    } else {
+      baseShelf = makeBox(1.72, 1.02, 0.1, '#c2cad2', `baseShelf-${moduleIndex + 1}`);
+    }
+    baseShelf.position.set(
+      TUNE.shelfOffset[0],
+      TUNE.shelfOffset[1],
+      baseRowZ + TUNE.shelfOffset[2],
+    );
+    baseShelf.userData.targetY = TUNE.shelfOffset[1];
+    baseShelf.userData.moduleDirection = direction;
+    baseShelves.push(baseShelf);
+    content.add(baseShelf);
   }
 
   const base = stageOneTemplates?.base
@@ -2111,6 +2142,7 @@ function createTwoPartLockerModel(stageOneTemplates = null) {
     sideWalls,
     backWalls,
     shelves,
+    baseShelves,
     lockerCells,
     base,
     baseFront,
@@ -2135,10 +2167,11 @@ function updateTwoPartLockerModel(
   stages,
   halfMode,
   troughLyingPoses = createDefaultTroughLyingPoses(),
-  // Czesci WYKONCZENIOWE (laczenie/nitowanie, plecy, dach, daszek) montuje sie
-  // dopiero POZA rolotokiem na stanowisku offline (etap 4). Na rolotoku (etap 3)
-  // jest tylko wlozenie obu polowek w podstawe na palecie. Faza 3 wlaczy ten
-  // tryb dla modelu na stanowisku; tu domyslnie WYLACZONY.
+  // Czesci WYKONCZENIOWE (laczenie/nitowanie, plecy, dach, daszek). Domyslnie
+  // montuja sie NA PALECIE na etapie 3, zaraz po postawieniu obu polowek
+  // (placeHalf przekazuje finishOnPallet). Gdy istnieje etap offline (ostatni
+  // etap z ikona 'offline'), wykonczenie odbywa sie poza linia na stanowisku
+  // i wlacza je dopiero placeOffline.
   showFinishing = false,
   finalLanding = null,
 ) {
@@ -2322,6 +2355,18 @@ function updateTwoPartLockerModel(
       shelf.material.emissive = new THREE.Color(ACCENT_COLOR);
       shelf.material.emissiveIntensity = rawProgress > 0 && rawProgress < 1 ? 0.12 : 0;
     }
+  });
+
+  // Plaska dolna polka (jedna na modul): pojawia sie razem z konstrukcja, tuz
+  // przed skrytkami - tak jak zwykle polki, tylko bez indeksu rzedu (jest u
+  // samego dolu). index 0 = modul 0, index 1 = modul 1.
+  parts.baseShelves.forEach((shelf, moduleIndex) => {
+    const fr = modFr(moduleIndex);
+    const progress = smooth(THREE.MathUtils.clamp((fr.structure - 0.3) / 0.4, 0, 1));
+    setPartOpacity(shelf, progress);
+    shelf.position.y = shelf.userData.targetY + (1 - progress) * 0.95;
+    shelf.position.x = (1 - progress) * shelf.userData.moduleDirection * 0.45;
+    shelf.rotation.z = (1 - progress) * shelf.userData.moduleDirection * 0.1;
   });
 
   parts.backWalls.forEach((backWall, index) => {
@@ -2556,8 +2601,10 @@ function createWorkTable(cfg = {}) {
   const topY = cfg.topY ?? CONVEYOR_SURFACE_Y;
   const group = new THREE.Group();
   group.name = 'staticStageTable';
-  const frameMaterial = makeMaterial('#1f2937', 0.55, 0.35);
-  const topMaterial = makeMaterial(cfg.color ?? '#cbd5e1', 0.45, 0.25);
+  // Stalowo-grafitowa kolorystyka jak rama rolotoku - jasny blat zlewal sie
+  // z bialym tlem sceny i wygladal jak plastikowa lada zamiast stanowiska.
+  const frameMaterial = makeMaterial('#111827', 0.55, 0.38);
+  const topMaterial = makeMaterial(cfg.color ?? '#5f6e7e', 0.55, 0.35);
   const topThickness = 0.12;
 
   const top = new THREE.Mesh(new THREE.BoxGeometry(width, topThickness, depth), topMaterial);
@@ -2567,12 +2614,13 @@ function createWorkTable(cfg = {}) {
   top.name = 'tableTop';
   group.add(top);
 
-  // Rama pod blatem (fartuch) usztywniajaca konstrukcje.
+  // Rama pod blatem (fartuch) usztywniajaca konstrukcje. Obnizona o 0.01,
+  // zeby jej gorne lico nie pokrywalo sie z dolnym licem blatu (z-fighting).
   const apron = new THREE.Mesh(
     new THREE.BoxGeometry(width - 0.24, 0.16, depth - 0.24),
     frameMaterial,
   );
-  apron.position.y = topY - topThickness - 0.08;
+  apron.position.y = topY - topThickness - 0.09;
   apron.castShadow = true;
   group.add(apron);
 
@@ -2613,9 +2661,11 @@ function createWorkTable(cfg = {}) {
 function createTiltTableRig({ width, thickness, slabMinZ, slabTopY, hingeY = 0.4 }) {
   const group = new THREE.Group();
   group.name = 'tiltTableRig';
-  const frameMaterial = makeMaterial('#1f2937', 0.55, 0.35);
-  const slabMaterial = makeMaterial('#b7c1cb', 0.42, 0.3);
-  const accentMaterial = makeMaterial('#b45309', 0.5, 0.25);
+  // Stalowy blat + grafitowa rama (jak rolotok). Wczesniejszy jasnoszary blat
+  // zlewal sie z bialym tlem i czescia - wywrotnica byla nieczytelna.
+  const frameMaterial = makeMaterial('#111827', 0.55, 0.38);
+  const slabMaterial = makeMaterial('#5f6e7e', 0.55, 0.35);
+  const accentMaterial = makeMaterial('#d97706', 0.35, 0.4);
 
   const pivot = new THREE.Group();
   pivot.name = 'tiltTablePivot';
@@ -2656,12 +2706,15 @@ function createTiltTableRig({ width, thickness, slabMinZ, slabTopY, hingeY = 0.4
     ));
   });
 
-  // Pas ostrzegawczy na krawedzi blatu od strony rolotoku.
+  // Pas ostrzegawczy na krawedzi blatu od strony rolotoku. WYSTAJE minimalnie
+  // poza blat z KAZDEJ strony (szerokosc, grubosc, czolo) - wczesniej jego
+  // scianki byly idealnie wspolplaszczyznowe ze sciankami blatu, co dawalo
+  // migotanie tekstur (z-fighting) przy kazdym ruchu kamery.
   const edgeStripe = new THREE.Mesh(
-    new THREE.BoxGeometry(width, thickness + 0.02, 0.16),
+    new THREE.BoxGeometry(width + 0.04, thickness + 0.04, 0.18),
     accentMaterial,
   );
-  edgeStripe.position.set(0, slabTopY - thickness / 2, slabMinZ + 0.08);
+  edgeStripe.position.set(0, slabTopY - thickness / 2, slabMinZ + 0.07);
   pivot.add(edgeStripe);
 
   // Statyczny cokol zawiasu (nie obraca sie): wsporniki lozysk od zawiasu
@@ -2930,7 +2983,7 @@ function ThreeProductionScene({
       stationWorkers.length = 0;
       endPalletStandby = null;
       tiltTableRig = null;
-      routePoints = buildLinePoints(latestRef.current.stages.length);
+      routePoints = buildLinePoints(latestRef.current.stages);
       const rollerMaterial = makeMaterial(ROLLER_COLOR, 0.38, 0.58);
       // Rolki w strefie bufora (przelot) - inny, jasnoszary kolor dla wyroznienia.
       const bufferRollerMaterial = makeMaterial('#94a3b8', 0.45, 0.45);
@@ -3021,7 +3074,7 @@ function ThreeProductionScene({
         // Etap offline ma N rownoleglych stanowisk, wiec jego czas dzielimy przez N
         // (gdy offline jest waskim gardlem, jego strefe podswietla Faza 3 osobno).
         const bnStages = latestRef.current.stages;
-        const bnOffIdx = getOfflineStageIndex(bnStages.length);
+        const bnOffIdx = getOfflineStageIndex(bnStages);
         const bnOffN = Math.max(getOfflineServerCount(), 1);
         let bnIndex = -1, bnMax = -1;
         bnStages.forEach((st, i) => {
@@ -3060,10 +3113,11 @@ function ThreeProductionScene({
         // Podmontaze, komponenty, magazyny, naprawa, kaciki, bufor podstaw.
         buildPeripheralSectors(staticGroup, routePoints, TUNE.sectors ?? {});
 
-        // === ETAP 4: 2 STANOWISKA OFFLINE + PALETY (poza rolotokiem) ===
+        // === ETAP OFFLINE (opcjonalny): STANOWISKA + PALETY (poza rolotokiem) ===
+        // Aktywne tylko, gdy OSTATNI etap ma ikone 'offline' (patrz simulation.js).
         offlineStationVecs = [];
         const stagesNow = latestRef.current.stages;
-        if (isOfflineEnabled(stagesNow.length) && (TUNE.offline?.enabled ?? false)) {
+        if (isOfflineEnabled(stagesNow)) {
           const off = TUNE.offline ?? {};
           offlineStationVecs = getOfflineStationVectors(routePoints);
           offlineStationVecs.forEach((pos, i) => {
@@ -3086,7 +3140,7 @@ function ThreeProductionScene({
             // Liczba - OSOBNE pole na KAZDE stanowisko (offlineStationWorkers[i]),
             // rozlozeni po obu stronach palety tak samo jak na stacjach rolotoku.
             // Czysto wizualne - czas etapu 4 nadal liczy sie z workersPerStation.
-            const offlineStageIdx = getOfflineStageIndex(stagesNow.length);
+            const offlineStageIdx = getOfflineStageIndex(stagesNow);
             const offlineStageColor = stagesNow[offlineStageIdx]?.color ?? '#db2777';
             const offlineStationWorkersCfg = latestRef.current.offlineStationWorkers ?? [];
             const offlineWorkerCount = Math.max(
@@ -3123,24 +3177,33 @@ function ThreeProductionScene({
               staticGroup.add(workerMarker);
             });
           });
-          // Paleta na koncu rolotoku — na ziemi ZA ostatnia stacja (nie pod tasma),
-          // tam spuszczane sa gotowe paczkomaty na palete (etap 3 -> dojazd).
-          if (off.showEndPallet ?? true) {
-            const endPallet = createPalletPlaceholder(off.pallet ?? {});
-            const endPos = getEndPalletVector(routePoints);
-            // Wywrotnica: paleta czeka juz PRZESUNIETA pod gniazdo pierwszej
-            // polowy (ten sam shift co placeHalf), zeby nie skakala przy
-            // przejeciu przez carrier w chwili przyjazdu czesci na stol.
-            if (TUNE.tiltTable?.enabled ?? false) {
-              const fwd = getRouteTangent(routePoints, routePoints.length - 1);
-              const rightDir = new THREE.Vector3(fwd.z, 0, -fwd.x);
-              const firstFinalX = stageOneTemplates?.moduleCenterX?.[0] ?? 1.02;
-              endPos.addScaledVector(rightDir, -firstFinalX * MODEL_RENDER_SCALE);
-            }
-            endPallet.position.set(endPos.x, 0, endPos.z);
-            endPalletStandby = endPallet;
-            staticGroup.add(endPallet);
+        }
+
+        // Paleta na koncu rolotoku — na ziemi ZA ostatnia stacja (nie pod
+        // tasma), tam spuszczane sa gotowe paczkomaty na palete na etapie 3.
+        // NIEZALEZNA od etapu offline: stoi zawsze, gdy ostatnia stacja
+        // rolotoku to 'finalize' (nitowanie + dach odbywa sie tez na niej).
+        const conveyorFinalStage = stagesNow[getConveyorFinalIndex(stagesNow)];
+        if (
+          conveyorFinalStage?.icon === 'finalize'
+          && routePoints.length > 0
+          && (TUNE.offline?.showEndPallet ?? true)
+        ) {
+          const off = TUNE.offline ?? {};
+          const endPallet = createPalletPlaceholder(off.pallet ?? {});
+          const endPos = getEndPalletVector(routePoints);
+          // Wywrotnica: paleta czeka juz PRZESUNIETA pod gniazdo pierwszej
+          // polowy (ten sam shift co placeHalf), zeby nie skakala przy
+          // przejeciu przez carrier w chwili przyjazdu czesci na stol.
+          if (TUNE.tiltTable?.enabled ?? false) {
+            const fwd = getRouteTangent(routePoints, routePoints.length - 1);
+            const rightDir = new THREE.Vector3(fwd.z, 0, -fwd.x);
+            const firstFinalX = stageOneTemplates?.moduleCenterX?.[0] ?? 1.02;
+            endPos.addScaledVector(rightDir, -firstFinalX * MODEL_RENDER_SCALE);
           }
+          endPallet.position.set(endPos.x, 0, endPos.z);
+          endPalletStandby = endPallet;
+          staticGroup.add(endPallet);
         }
       }
 
@@ -3159,11 +3222,13 @@ function ThreeProductionScene({
           ? routePoints[1].clone().addScaledVector(direction, -(sfs.conveyorLeadIn ?? 7))
           : first.clone().addScaledVector(direction, -entryExtension);
         // Wywrotnica (etap 3): rolotok konczy sie PRZED ostatnia stacja -
-        // czesc zsuwa sie z ostatnich rolek na stol uchylny.
+        // czesc zsuwa sie z ostatnich rolek na stol uchylny. NIEZALEZNA od
+        // etapu offline - dziala zawsze, gdy ostatnia stacja rolotoku to
+        // 'finalize' (stawianie do pionu + nitowanie i dach na palecie).
+        const tiltStages = latestRef.current.stages;
         const tiltCfg = TUNE.tiltTable ?? {};
         const tiltOn = (tiltCfg.enabled ?? false)
-          && isOfflineEnabled(latestRef.current.stages.length)
-          && (TUNE.offline?.enabled ?? false);
+          && tiltStages[getConveyorFinalIndex(tiltStages)]?.icon === 'finalize';
         const conveyorEnd = tiltOn
           ? last.clone().addScaledVector(direction, -(tiltCfg.conveyorCut ?? 3.2))
           : last.clone().addScaledVector(direction, exitExtension);
@@ -3650,10 +3715,13 @@ function ThreeProductionScene({
         const conveyorLift = isStandingStage
           ? THREE.MathUtils.lerp(horizontalLift, TUNE.standingY, standingLiftProgress)
           : horizontalLift;
-        const usePalletLanding = isStandingStage
-          && isOfflineEnabled(stagesNow.length)
-          && (TUNE.offline?.enabled ?? false)
-          && routePoints.length > 0;
+        // Ladowanie na palecie to STANDARDOWE zachowanie etapu 3 (finalize) -
+        // niezalezne od istnienia etapu offline.
+        const usePalletLanding = isStandingStage && routePoints.length > 0;
+        // Wykonczenie (nitowanie/plecy/dach/daszek) montuje sie NA PALECIE na
+        // etapie 3, zaraz po postawieniu obu polowek - chyba ze istnieje etap
+        // offline (wtedy, jak dotad, odbywa sie poza linia na stanowisku).
+        const finishOnPallet = usePalletLanding && !isOfflineEnabled(stagesNow);
         let finalLanding = null;
         let palletLandingWorld = null;
         let palletLandingAngle = pose.angle;
@@ -3738,13 +3806,35 @@ function ThreeProductionScene({
               }
             }
           }
+          // === ODJAZD GOTOWEJ PALETY ===
+          // Po zlozeniu OBU polowek i chwili prezentacji paleta z gotowym
+          // paczkomatem ODJEZDZA wzdluz linii, zamiast znikac w miejscu.
+          // Kwadratowa krzywa: rusza powoli (bez szarpniecia), przyspiesza i
+          // znika w pelnym ruchu daleko za linia - naturalny wyjazd wozkiem.
+          const bothHalvesDone = leadUnit?.mode === 'completed'
+            && (!trailUnit || trailUnit.mode === 'completed');
+          const departWindow = THREE.MathUtils.clamp(
+            (((trailUnit ?? leadUnit)?.completedProgress ?? 0) - 0.4) / 0.6,
+            0,
+            1,
+          );
+          const departProgress = bothHalvesDone ? departWindow * departWindow : 0;
+          const departOffset = forward.clone().multiplyScalar(
+            departProgress * (TUNE.offline?.leaveDistance ?? 9) * 1.7,
+          );
           // Ten sam cel co centerWorldModelsOnPallet: srodek palety + reczne
           // strojenie modelOffset (x/z).
-          const landingGround = endGround.clone()
+          const landingGroundBase = endGround.clone()
             .addScaledVector(right, (modelOffset[0] ?? 0) + palletShift)
             .addScaledVector(forward, modelOffset[2] ?? 0)
             .sub(anchorWorldOffset);
-          const deltaFromPallet = pose.position.clone().sub(landingGround);
+          const landingGround = landingGroundBase.clone().add(departOffset);
+          // Offsety ladowania ZAWSZE wzgledem pozycji BAZOWEJ (bez odjazdu):
+          // pozycja koncowa czesci jest od nich niezalezna (czesc odjezdza,
+          // bo jedzie z model.position = landingGround), a zawias wywrotnicy
+          // (tiltHingeLocal) liczy sie z tych offsetow - gdyby rosly podczas
+          // odjazdu, stol "zapadalby sie" pod podloge.
+          const deltaFromPallet = pose.position.clone().sub(landingGroundBase);
           finalLanding = {
             enabled: true,
             tilt: tiltOn,
@@ -3753,7 +3843,9 @@ function ThreeProductionScene({
             offsetZ: deltaFromPallet.dot(forward) / MODEL_RENDER_SCALE,
             arcLift: (off.landingLift ?? 0.72) / MODEL_RENDER_SCALE,
           };
-          palletLandingWorld = endGround.clone().addScaledVector(right, palletShift);
+          palletLandingWorld = endGround.clone()
+            .addScaledVector(right, palletShift)
+            .add(departOffset);
           palletLandingAngle = angle;
           if (halfMode === 'lead') showEndPalletForUnit(poseUnit, palletLandingWorld);
           model.position.set(landingGround.x, targetWorldY, landingGround.z);
@@ -3769,7 +3861,7 @@ function ThreeProductionScene({
               tiltTableHingeWorld = new THREE.Vector3(
                 pose.position.x,
                 targetWorldY + hingeLocal.y * MODEL_RENDER_SCALE,
-                landingGround.z + hingeLocal.z * MODEL_RENDER_SCALE,
+                landingGroundBase.z + hingeLocal.z * MODEL_RENDER_SCALE,
               );
             }
           }
@@ -3832,7 +3924,7 @@ function ThreeProductionScene({
           stagesNow,
           halfMode,
           troughLyingPosesRef.current,
-          false,
+          finishOnPallet,
           finalLanding,
         );
 
@@ -4403,7 +4495,7 @@ function App() {
   const [speedMultiplier, setSpeedMultiplier] = useState(1);
   const speedRef = useRef(1);
   speedRef.current = speedMultiplier;
-  const [travelTimes, setTravelTimes] = useState(() => getDefaultTravelTimes(baseStages.length));
+  const [travelTimes, setTravelTimes] = useState(() => getDefaultTravelTimes(baseStages));
   const [offlinePalletTravel, setOfflinePalletTravel] = useState(
     () => TUNE.offline?.palletTravel ?? 6,
   );
@@ -4463,8 +4555,8 @@ function App() {
     [normalizedBaseStages, normalizedWorkerEffect, normalizedWorkers],
   );
   const normalizedTravelTimes = useMemo(
-    () => normalizeTravelTimes(travelTimes, normalizedStages.length),
-    [normalizedStages.length, travelTimes],
+    () => normalizeTravelTimes(travelTimes, normalizedStages),
+    [normalizedStages, travelTimes],
   );
   const productionSchedule = useMemo(() => {
     const schedule = buildProductionSchedule(
@@ -4546,8 +4638,8 @@ function App() {
   }, [animationCycle, normalizedStages.length, productionCount]);
 
   React.useEffect(() => {
-    setTravelTimes((current) => normalizeTravelTimes(current, normalizedStages.length));
-  }, [normalizedStages.length]);
+    setTravelTimes((current) => normalizeTravelTimes(current, normalizedStages));
+  }, [normalizedStages]);
 
   React.useEffect(() => {
     if (!stopwatchRunning) return undefined;
@@ -4589,7 +4681,7 @@ function App() {
 
   const updateTravelTime = (index, value) => {
     setTravelTimes((current) => {
-      const next = normalizeTravelTimes(current, normalizedStages.length);
+      const next = normalizeTravelTimes(current, normalizedStages);
       next[index] = value;
       return next;
     });
@@ -4666,7 +4758,7 @@ function App() {
 
   const resetStages = () => {
     setStages(baseStages.map((stage) => ({ ...stage, id: crypto.randomUUID() })));
-    setTravelTimes(getDefaultTravelTimes(baseStages.length));
+    setTravelTimes(getDefaultTravelTimes(baseStages));
   };
 
   const handleAssemblyMetrics = React.useCallback(({ partLength }) => {
