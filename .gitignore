@@ -1,5 +1,13 @@
 node_modules/
-debug.log
-vite-dev.*.log
-vite-personal.*.log
+
+# Build output — Vercel odtwarza go z `npm run build` (outputDirectory: dist)
+dist/
+
+# Logi
+*.log
+
+# Vercel
 .vercel
+
+# Lokalna konfiguracja Claude Code (nie kod projektu)
+.claude/
