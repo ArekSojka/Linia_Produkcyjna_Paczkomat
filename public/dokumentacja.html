@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dokumentacja - Linia produkcyjna paczkomatu</title>
+<style>
+  :root {
+    --blue:#2563eb; --amber:#d97706; --gray:#64748b; --red:#dc2626;
+    --green:#16a34a; --purple:#7c3aed; --pink:#db2777;
+    --ink:#1e293b; --muted:#64748b; --bg:#f1f5f9; --card:#ffffff; --line:#e2e8f0;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+         background:var(--bg); color:var(--ink); line-height:1.6; }
+  .page { max-width: 880px; margin: 0 auto; padding: 24px 18px 80px; }
+  header.hero { text-align:center; padding: 28px 0 8px; }
+  header.hero h1 { font-size: 26px; margin: 0 0 6px; }
+  header.hero p { color: var(--muted); margin: 0; font-size: 15px; }
+  nav.toc { background:var(--card); border:1px solid var(--line); border-radius:12px;
+            padding: 14px 18px; margin: 22px 0; display:flex; flex-wrap:wrap; gap: 8px 18px; }
+  nav.toc a { color: var(--blue); text-decoration: none; font-size: 14px; font-weight: 500; }
+  nav.toc a:hover { text-decoration: underline; }
+  section.card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+                 padding: 22px 24px; margin: 18px 0; scroll-margin-top: 12px; }
+  section.card h2 { margin: 0 0 4px; font-size: 20px; display:flex; align-items:center; gap:10px; }
+  section.card h2 .num { display:inline-grid; place-items:center; width:28px; height:28px;
+      border-radius:50%; background:var(--blue); color:#fff; font-size:15px; flex:0 0 auto; }
+  section.card h3 { font-size: 15px; margin: 20px 0 6px; }
+  p.lead { color: var(--muted); margin-top: 2px; }
+  .figure { margin: 16px 0; padding: 14px; background:#f8fafc; border:1px solid var(--line);
+            border-radius:10px; overflow-x:auto; }
+  .figure figcaption { font-size: 12.5px; color: var(--muted); margin-top: 8px; text-align:center; }
+  .figure svg { display:block; margin:0 auto; max-width:100%; height:auto; }
+  .figure img { display:block; margin:0 auto; max-width:100%; height:auto;
+                border:1px solid var(--line); border-radius:8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 10px 0; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #f8fafc; font-size: 13px; }
+  .ok { color: var(--green); font-weight:600; }
+  .warn { color: var(--red); font-weight:600; }
+  .pill { display:inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12.5px;
+          font-weight: 600; color:#fff; white-space:nowrap; }
+  .tip { background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding: 10px 14px;
+         font-size: 14px; margin: 12px 0; }
+  .tip.red { background:#fef2f2; border-color:#fecaca; }
+  .tip b:first-child { display:block; margin-bottom:2px; }
+  code { background:#f1f5f9; border:1px solid var(--line); border-radius:5px;
+         padding: 1px 6px; font-size: 13px; }
+  ol.steps { padding-left: 0; counter-reset: step; list-style: none; }
+  ol.steps li { counter-increment: step; position: relative; padding: 6px 0 6px 40px; }
+  ol.steps li::before { content: counter(step); position:absolute; left:0; top:7px;
+      width:26px; height:26px; border-radius:50%; background:#e0e7ff; color:#3730a3;
+      font-weight:700; font-size:14px; display:grid; place-items:center; }
+  footer { text-align:center; color:var(--muted); font-size: 13px; margin-top: 30px; }
+  a.btn { display:inline-block; background:var(--blue); color:#fff; text-decoration:none;
+          border-radius:8px; padding: 8px 16px; font-size:14px; font-weight:600; margin: 4px 6px 0 0; }
+  ul { margin: 8px 0; padding-left: 22px; }
+  li { margin: 3px 0; }
+  @media print {
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background:#fff; }
+    header.hero p a.btn { display:none; }
+    nav.toc { display:none; }
+    section.card { break-inside: avoid-page; border-color:#cbd5e1; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="hero">
+  <h1>📦 Linia produkcyjna paczkomatu - instrukcja</h1>
+  <p style="margin-top:10px">
+    <a class="btn" href="./">Otwórz wizualizację</a>
+    <a class="btn" style="background:var(--pink)" href="./edytor_stref.html">Otwórz edytor stref</a>
+    <a class="btn" style="background:var(--gray)" href="./dokumentacja.pdf" download>⤓ Pobierz PDF</a>
+  </p>
+</header>
+
+<nav class="toc">
+  <a href="#co-to">1. Co to jest</a>
+  <a href="#zapis">2. Jak zapisują się zmiany</a>
+  <a href="#stanowiska">3. Linia i stanowiska</a>
+  <a href="#czasy">4. Czasy i metryki</a>
+  <a href="#strefy">5. Strefy hali (edytor)</a>
+  <a href="#faq">6. Szybkie odpowiedzi</a>
+</nav>
+
+<!-- ====================================================== -->
+<section class="card" id="co-to">
+  <h2><span class="num">1</span> Co to jest</h2>
+  <p class="lead">Symulator linii montażu paczkomatów - do planowania, nie do sterowania.</p>
+  <p>Aplikacja pokazuje w 3D, jak paczkomat przechodzi przez kolejne stanowiska montażowe.
+     Zmieniasz czasy, liczbę pracowników i układ hali - a aplikacja od razu przelicza
+     <b>przepustowość linii</b> (ile sztuk na godzinę / na zmianę) i pokazuje,
+     które stanowisko ma bottleneck.</p>
+  <p>Strona działa w każdej przeglądarce, bez instalacji:
+     <br/><code>https://linia-produkcyjna-paczkomat.vercel.app/</code></p>
+
+  <h3>Ikonki w lewym górnym rogu wizualizacji</h3>
+  <div class="figure">
+    <img src="docs/ikonki-wizualizacji.png" alt="Pasek ikonek w wizualizacji" style="max-width:260px" />
+    <figcaption>Od lewej: oddal kamerę · przybliż kamerę · resetuj widok · edytor stref · ta dokumentacja.</figcaption>
+  </div>
+  <p>Kamerą sterujesz myszką: <b>lewy przycisk</b> = obrót, <b>prawy</b> = przesunięcie,
+     <b>kółko</b> = zoom.</p>
+
+  <h3>Co znaczy „Modele GLB aktywne”?</h3>
+  <div class="figure">
+    <img src="docs/modele-glb.png" alt="Wskaźnik Modele GLB aktywne" style="max-width:220px" />
+  </div>
+  <p><b>GLB</b> to format plików 3D — w nich zapisane są rzeczywiste modele CAD części
+     paczkomatu (koryta, zamki, ściany, drzwi, dach…). Wskaźnik w prawym górnym rogu
+     mówi, czy udało się je pobrać:</p>
+  <ul>
+    <li><b>„Ladowanie modeli GLB”</b> — modele jeszcze się pobierają (chwila po otwarciu strony).</li>
+    <li><b style="color:var(--green)">„Modele GLB aktywne”</b> — wszystko OK, w scenie widzisz prawdziwe części CAD.</li>
+    <li><b style="color:var(--red)">„Model GLB niedostepny”</b> — modeli nie dało się pobrać (np. słaba sieć);
+        aplikacja pokazuje wtedy uproszczone bryły zastępcze, ale <b>symulacja i wszystkie
+        obliczenia czasów działają normalnie</b>.</li>
+  </ul>
+</section>
+
+<!-- ====================================================== -->
+<section class="card" id="zapis">
+  <h2><span class="num">2</span> Jak zapisują się zmiany</h2>
+  <p class="lead">Strona jest statyczna - nie ma bazy danych. Zmiany zapisują się w Twojej przeglądarce.</p>
+
+  <div class="figure">
+    <svg viewBox="0 0 820 240" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+      <!-- komputer A -->
+      <rect x="20" y="30" width="230" height="150" rx="12" fill="#eff6ff" stroke="#93c5fd" stroke-width="2"/>
+      <text x="135" y="58" text-anchor="middle" font-size="15" font-weight="700" fill="#1d4ed8">Twój komputer</text>
+      <rect x="45" y="75" width="180" height="40" rx="8" fill="#fff" stroke="#93c5fd"/>
+      <text x="135" y="100" text-anchor="middle" font-size="13" fill="#1e293b">przeglądarka (Chrome…)</text>
+      <rect x="45" y="125" width="180" height="40" rx="8" fill="#dbeafe" stroke="#60a5fa"/>
+      <text x="135" y="143" text-anchor="middle" font-size="12" font-weight="600" fill="#1e40af">pamięć lokalna</text>
+      <text x="135" y="158" text-anchor="middle" font-size="11" fill="#3b82f6">tu trafiają Twoje zmiany ✓</text>
+      <!-- serwer -->
+      <rect x="570" y="30" width="230" height="150" rx="12" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
+      <text x="685" y="58" text-anchor="middle" font-size="15" font-weight="700" fill="#475569">Serwer (Vercel)</text>
+      <rect x="595" y="75" width="180" height="40" rx="8" fill="#fff" stroke="#cbd5e1"/>
+      <text x="685" y="100" text-anchor="middle" font-size="13" fill="#1e293b">strona + modele 3D</text>
+      <rect x="595" y="125" width="180" height="40" rx="8" fill="#fff" stroke="#cbd5e1"/>
+      <text x="685" y="143" text-anchor="middle" font-size="12" font-weight="600" fill="#475569">strefy.json (układ hali)</text>
+      <text x="685" y="158" text-anchor="middle" font-size="11" fill="#94a3b8">tylko do odczytu</text>
+      <!-- strzalki -->
+      <line x1="570" y1="90" x2="255" y2="90" stroke="#64748b" stroke-width="2.5" marker-end="url(#arr)"/>
+      <text x="412" y="80" text-anchor="middle" font-size="12.5" fill="#475569">strona pobiera się przy otwarciu</text>
+      <line x1="255" y1="145" x2="330" y2="145" stroke="#dc2626" stroke-width="2.5" stroke-dasharray="7 5"/>
+      <text x="412" y="138" text-anchor="middle" font-size="12.5" font-weight="600" fill="#dc2626">zmiany NIE wracają na serwer</text>
+      <text x="412" y="156" text-anchor="middle" font-size="11.5" fill="#dc2626">(zostają tylko u Ciebie)</text>
+      <defs>
+        <marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 Z" fill="#64748b"/>
+        </marker>
+      </defs>
+      <text x="410" y="222" text-anchor="middle" font-size="12.5" fill="#64748b">Każdy komputer / każda przeglądarka ma więc SWOJE własne ustawienia.</text>
+    </svg>
+  </div>
+
+  <h3>Co to oznacza w praktyce</h3>
+  <table>
+    <tr><th>Sytuacja</th><th>Czy ustawienia przetrwają?</th></tr>
+    <tr><td>Zamknięcie karty / przeglądarki, restart komputera</td><td class="ok">✓ Tak</td></tr>
+    <tr><td>Powrót na stronę następnego dnia (ta sama przeglądarka)</td><td class="ok">✓ Tak</td></tr>
+    <tr><td>Otwarcie strony na <b>innym komputerze</b> lub w innej przeglądarce</td><td class="warn">✗ Nie - tam są osobne ustawienia</td></tr>
+    <tr><td>Wyczyszczenie historii / danych przeglądarki</td><td class="warn">✗ Nie - ustawienia znikają</td></tr>
+    <tr><td>Tryb incognito</td><td class="warn">✗ Nie nic się nie zapisuje</td></tr>
+  </table>
+
+  <div class="tip">
+    <b>💡 Jak utrwalić układ hali „na stałe” dla wszystkich?</b>
+    W edytorze stref kliknij <b>„⤓ strefy.json”</b> - pobrany plik przekaż osobie, która
+    wgrywa aplikację (podmienia plik <code>config/strefy.json</code> przy wdrożeniu).
+    Od tej chwili każdy komputer zobaczy nowy układ.
+  </div>
+</section>
+
+<!-- ====================================================== -->
+<section class="card" id="stanowiska">
+  <h2><span class="num">3</span> Linia i stanowiska</h2>
+  <p class="lead">Paczkomat jedzie rolotokiem przez 4 stanowiska. Linia kończy się na etapie 4 —
+     postawienie na podstawę, nitowanie i montaż dachu.</p>
+
+  <div class="figure">
+    <svg viewBox="0 0 740 270" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+      <!-- rolotok -->
+      <rect x="30" y="100" width="640" height="56" rx="6" fill="#e2e8f0" stroke="#94a3b8" stroke-width="2"/>
+      <g fill="#cbd5e1">
+        <rect x="40" y="106" width="6" height="44" rx="3"/><rect x="70" y="106" width="6" height="44" rx="3"/>
+        <rect x="100" y="106" width="6" height="44" rx="3"/><rect x="130" y="106" width="6" height="44" rx="3"/>
+        <rect x="160" y="106" width="6" height="44" rx="3"/><rect x="190" y="106" width="6" height="44" rx="3"/>
+        <rect x="220" y="106" width="6" height="44" rx="3"/><rect x="250" y="106" width="6" height="44" rx="3"/>
+        <rect x="490" y="106" width="6" height="44" rx="3"/><rect x="520" y="106" width="6" height="44" rx="3"/>
+        <rect x="550" y="106" width="6" height="44" rx="3"/><rect x="580" y="106" width="6" height="44" rx="3"/>
+        <rect x="610" y="106" width="6" height="44" rx="3"/><rect x="640" y="106" width="6" height="44" rx="3"/>
+      </g>
+      <!-- bufor: szare rolki, tak jak w wizualizacji 3D -->
+      <rect x="280" y="100" width="200" height="56" rx="6" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+      <g fill="#94a3b8">
+        <rect x="292" y="106" width="6" height="44" rx="3"/><rect x="322" y="106" width="6" height="44" rx="3"/>
+        <rect x="352" y="106" width="6" height="44" rx="3"/><rect x="382" y="106" width="6" height="44" rx="3"/>
+        <rect x="412" y="106" width="6" height="44" rx="3"/><rect x="442" y="106" width="6" height="44" rx="3"/>
+        <rect x="466" y="106" width="6" height="44" rx="3"/>
+      </g>
+      <text x="380" y="94" text-anchor="middle" font-size="12" font-weight="700" fill="#b45309">BUFOR (przelot) — szare rolki</text>
+      <!-- kierunek -->
+      <line x1="30" y1="70" x2="670" y2="70" stroke="#64748b" stroke-width="2" marker-end="url(#arr2)"/>
+      <text x="345" y="62" text-anchor="middle" font-size="12" fill="#475569">kierunek produkcji →</text>
+      <!-- stacje -->
+      <g text-anchor="middle">
+        <rect x="55" y="170" width="120" height="58" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+        <text x="115" y="192" font-size="13" font-weight="700" fill="#5b21b6">E1</text>
+        <text x="115" y="209" font-size="11.5" fill="#4c1d95">Podmontaż koryt</text>
+        <line x1="115" y1="170" x2="115" y2="156" stroke="#7c3aed" stroke-width="2"/>
+
+        <rect x="195" y="170" width="120" height="58" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+        <text x="255" y="192" font-size="13" font-weight="700" fill="#5b21b6">E2</text>
+        <text x="255" y="209" font-size="11.5" fill="#4c1d95">Montaż pionów</text>
+        <line x1="255" y1="170" x2="255" y2="156" stroke="#7c3aed" stroke-width="2"/>
+
+        <rect x="440" y="170" width="120" height="58" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+        <text x="500" y="192" font-size="13" font-weight="700" fill="#5b21b6">E3</text>
+        <text x="500" y="209" font-size="11.5" fill="#4c1d95">Montaż drzwi</text>
+        <line x1="500" y1="170" x2="500" y2="156" stroke="#7c3aed" stroke-width="2"/>
+
+        <rect x="575" y="170" width="130" height="58" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+        <text x="640" y="188" font-size="13" font-weight="700" fill="#5b21b6">E4</text>
+        <text x="640" y="204" font-size="11" fill="#4c1d95">Włożenie w podstawę,</text>
+        <text x="640" y="218" font-size="11" fill="#4c1d95">nitowanie + dach</text>
+        <line x1="640" y1="170" x2="640" y2="156" stroke="#7c3aed" stroke-width="2"/>
+      </g>
+      <text x="350" y="256" text-anchor="middle" font-size="12" fill="#64748b">Za E4 gotowy paczkomat schodzi z linii — koniec symulacji.</text>
+      <defs>
+        <marker id="arr2" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 Z" fill="#64748b"/>
+        </marker>
+      </defs>
+    </svg>
+  </div>
+
+  <h3>Co się dzieje na każdym stanowisku</h3>
+  <table>
+    <tr><th style="width:130px">Stanowisko</th><th>Praca</th></tr>
+    <tr><td><span class="pill" style="background:var(--purple)">E1</span> Podmontaż koryt</td>
+        <td>Składanie koryt i zamków - początek linii.</td></tr>
+    <tr><td><span class="pill" style="background:var(--purple)">E2</span> Montaż pionów</td>
+        <td>Piony i półki - powstaje szkielet skrytek.</td></tr>
+    <tr><td><span class="pill" style="background:var(--amber)">Bufor</span></td>
+        <td>Odcinek przelotowy między E2 a E3. Gotowe sztuki czekają tu, aż zwolni się E3.
+            <b>W wizualizacji 3D poznasz go po szarym kolorze rolek</b> — reszta rolotoku ma rolki jasne.</td></tr>
+    <tr><td><span class="pill" style="background:var(--purple)">E3</span> Montaż drzwi</td>
+        <td>Montaż drzwi skrytek.</td></tr>
+    <tr><td><span class="pill" style="background:var(--purple)">E4</span> Włożenie w podstawę</td>
+        <td>Obie połowy paczkomatu są stawiane do pionu, wkładane w podstawę i nitowane, dochodzi dach.
+            Tu kończy się linia.</td></tr>
+  </table>
+
+  <h3>Konfiguracja procesu (lewy panel)</h3>
+  <div class="figure">
+    <img src="docs/konfiguracja-procesu.png" alt="Panel Konfiguracja procesu" style="max-width:520px" />
+    <figcaption>Panel „Konfiguracja procesu” — nazwa, czas bazowy, kolor i typ każdego etapu.</figcaption>
+  </div>
+  <p>Każdy etap ma <b>nazwę, czas bazowy, kolor i typ</b>. Typ decyduje o animacji w 3D
+     (np. „Koryto i zamki”, „Piony i polki”, „Skrytki”…). Przycisk ↺ przywraca domyślny proces.</p>
+
+  <div class="tip red">
+    <b>⚠ Dodawanie własnych etapów — ważne</b>
+    Możesz dodawać i usuwać etapy („Dodaj etap” / ikona kosza) i <b>wszystkie czasy oraz
+    metryki policzą się poprawnie</b>. Ale animacja 3D jest zbudowana pod domyślny proces
+    (4 etapy) — przy innej liczbie etapów <b>wizualizacja montażu może wyglądać źle</b>
+    (np. części pojawiają się w złym momencie). To tylko efekt wizualny; wynikom liczbowym
+    można ufać.
+  </div>
+</section>
+
+<!-- ====================================================== -->
+<section class="card" id="czasy">
+  <h2><span class="num">4</span> Czasy i metryki</h2>
+  <p class="lead">Wszystko liczy się z czasów etapów, czasów przejazdu i liczby pracowników.</p>
+
+  <h3>Z czego składa się czas jednej sztuki</h3>
+  <div class="figure">
+    <svg viewBox="0 0 820 120" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+      <g text-anchor="middle" font-size="12">
+        <rect x="20"  y="30" width="130" height="44" rx="7" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+        <text x="85" y="56" font-weight="600" fill="#4c1d95">praca E1</text>
+        <rect x="160" y="30" width="60" height="44" rx="7" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 3"/>
+        <text x="190" y="56" fill="#64748b">jazda</text>
+        <rect x="230" y="30" width="130" height="44" rx="7" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+        <text x="295" y="56" font-weight="600" fill="#4c1d95">praca E2</text>
+        <rect x="370" y="30" width="60" height="44" rx="7" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 3"/>
+        <text x="400" y="56" fill="#64748b">jazda</text>
+        <rect x="440" y="30" width="130" height="44" rx="7" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+        <text x="505" y="56" font-weight="600" fill="#4c1d95">praca E3</text>
+        <rect x="580" y="30" width="60" height="44" rx="7" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 3"/>
+        <text x="610" y="56" fill="#64748b">jazda</text>
+        <rect x="650" y="30" width="150" height="44" rx="7" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+        <text x="725" y="56" font-weight="600" fill="#4c1d95">praca E4 → gotowe</text>
+      </g>
+      <text x="410" y="105" text-anchor="middle" font-size="12.5" fill="#64748b">Cykl jednej sztuki = suma pracy na stanowiskach + wszystkie przejazdy</text>
+    </svg>
+  </div>
+
+  <h3>Czasy przejazdu (sekcja „Rolotok”)</h3>
+  <div class="figure">
+    <img src="docs/czasy-przejazdu.png" alt="Sekcja czasów przejazdu między etapami" style="max-width:560px" />
+    <figcaption>Każdy odcinek rolotoku (E1→E2, E2→E3, E3→E4) ma własny czas przejazdu.</figcaption>
+  </div>
+
+  <h3>Pracownicy skracają czas etapu</h3>
+  <div class="figure">
+    <img src="docs/pracownicy.png" alt="Sekcja Pracownicy" style="max-width:560px" />
+    <figcaption>Liczba pracowników na stanowisku i jej wpływ na czas etapu.</figcaption>
+  </div>
+  <ul>
+    <li>Każde stanowisko ma <b>czas bazowy</b> (dla 1 pracownika).</li>
+    <li>W sekcji <b>„Pracownicy”</b> ustawiasz liczbę osób na stanowisku i wybierasz efekt:
+        <b>„% szybciej”</b> albo <b>„sekundy mniej”</b> za każdego dodatkowego pracownika.</li>
+    <li>Obok od razu widać czas po skróceniu (np. <i>„2 prac. - 12:00 → 9:36”</i>).</li>
+  </ul>
+
+  <h3>Metryki w panelu „Parametry produkcji”</h3>
+  <div class="figure">
+    <img src="docs/obliczone-czasy.png" alt="Obliczone metryki produkcji" style="max-width:480px" />
+    <figcaption>Metryki przeliczają się natychmiast po każdej zmianie czasów lub pracowników.</figcaption>
+  </div>
+  <table>
+    <tr><th style="width:190px">Metryka</th><th>Znaczenie</th></tr>
+    <tr><td><b>Cykl jednej sztuki</b></td><td>Ile czasu mija od wejścia sztuki na linię do zejścia gotowej (praca + przejazdy + ewentualne czekanie).</td></tr>
+    <tr><td><b>Nowy start co</b></td><td>Co ile linia może wypuścić kolejną sztukę. Równe czasowi bottlenecka - nie da się szybciej.</td></tr>
+    <tr><td><b>Łączny czas ciągły</b></td><td>Czas wyprodukowania całej serii („Liczba paczkomatów”).</td></tr>
+    <tr><td><b>Na godzinę / na zmianę (8h)</b></td><td>Przepustowość przy pracy ciągłej.</td></tr>
+    <tr><td><b>Wykorzystanie stanowisk</b></td><td>Paski obciążenia. <span style="color:var(--red); font-weight:700">Czerwony = bottleneck</span> (100%) - to stanowisko narzuca tempo. Krótsze paski = stanowisko czeka. Ideał: wszędzie blisko 100%.</td></tr>
+  </table>
+
+  <div class="figure">
+    <img src="docs/wykorzystanie-stanowisk.png" alt="Paski wykorzystania stanowisk" style="max-width:640px" />
+    <figcaption>Czerwony pasek = bottleneck; pozostałe stanowiska nadążają.</figcaption>
+  </div>
+
+  <div class="tip">
+    <b>💡 Jak szukać bottlenecka?</b>
+    Patrz na czerwony pasek. Dodaj tam pracownika albo skróć czas etapu i obserwuj,
+    jak rośnie „Na zmianę (8h)”.
+  </div>
+
+  <h3>Eksportuj czasy do PDF</h3>
+  <p>Niebieski przycisk <b>„Eksportuj czasy do PDF”</b> (pod sekcją „Pracownicy”) tworzy
+     gotowy raport z bieżących ustawień:</p>
+  <ul>
+    <li>metryki (cykl, „nowy start co”, czas serii, przepustowość na godzinę i na zmianę),</li>
+    <li>tabelę wszystkich etapów: liczba pracowników, czas bazowy i po skróceniu,
+        czas przejazdu, ewentualne blokady oraz wykorzystanie w %,</li>
+    <li>wnioski: który etap jest bottleneckiem i gdzie sztuki czekają.</li>
+  </ul>
+  <ol class="steps">
+    <li>Kliknij <b>„Eksportuj czasy do PDF”</b> — raport otworzy się w nowej karcie
+        i pojawi się okno drukowania.</li>
+    <li>W polu drukarki wybierz <b>„Zapisz jako PDF”</b> i kliknij Zapisz — gotowe.</li>
+  </ol>
+  <div class="tip">
+    <b>💡 Nie otwiera się?</b>
+    Przeglądarka mogła zablokować wyskakujące okno - zezwól na wyskakujące okna dla tej
+    strony i kliknij przycisk jeszcze raz.
+  </div>
+
+  <h3>Pozostałe kontrolki</h3>
+  <ul>
+    <li><b>Prędkość symulacji</b> (1×–100×) - tylko przyspiesza animację, nie zmienia wyników.</li>
+    <li><b>Czasy przejazdu</b> (sekcja „Rolotok”) - osobno każdy odcinek E1→E2, E2→E3, E3→E4.</li>
+    <li><b>Stoper</b> - do ręcznych pomiarów.</li>
+  </ul>
+</section>
+
+<!-- ====================================================== -->
+<section class="card" id="strefy">
+  <h2><span class="num">5</span> Strefy hali - edytor</h2>
+  <p class="lead">Kolorowe pola wokół linii (magazyny, podmontaże, naprawa…) rysujesz w osobnym edytorze.</p>
+
+  <div class="figure">
+    <img src="docs/edytor-stref.png" alt="Edytor stref hali" />
+    <figcaption>Edytor stref: na środku plan hali ze strefami i stanowiskami linii (fioletowe),
+      u góry pasek narzędzi z zapisem, po prawej panel zaznaczonej strefy.</figcaption>
+  </div>
+
+  <h3>Jak zmienić układ hali</h3>
+  <ol class="steps">
+    <li>W wizualizacji kliknij przycisk <b>✏️</b> (przy przyciskach zoomu) - albo wejdź na
+        <code>…/edytor_stref.html</code>. Edytor sam wczyta aktualne strefy.</li>
+    <li><b>Przeciągaj</b> strefy myszką (środek = przesuń, biały róg = rozmiar).
+        Strzałki na klawiaturze też działają; <b>Shift+strzałki</b> zmieniają rozmiar.</li>
+    <li>W panelu po prawej ustaw <b>nazwę, typ, kolor</b> (własny kolor - pole „Kolor”,
+        powrót do koloru typu - „↺ typ”) i ewentualnie minuty.</li>
+    <li>Kliknij <b>„💾 Zapisz do aplikacji”</b> - gotowe. Wizualizacja używa nowego układu
+        (na tym komputerze).</li>
+    <li>Żeby układ zobaczyli <b>wszyscy</b> - pobierz <b>„⤓ strefy.json”</b> i przekaż do
+        podmiany pliku <code>config/strefy.json</code> przy wdrożeniu (patrz sekcja 2).</li>
+  </ol>
+
+  <h3>Typy stref i domyślne kolory</h3>
+  <p>
+    <span class="pill" style="background:var(--blue)">podmontaż</span>
+    <span class="pill" style="background:var(--amber)">komponenty</span>
+    <span class="pill" style="background:var(--gray)">magazyn</span>
+    <span class="pill" style="background:var(--red)">naprawa</span>
+    <span class="pill" style="background:var(--green)">kącik czystości</span>
+    &nbsp;a fioletowe prostokąty w edytorze to stałe stanowiska linii (E1–E4), których nie da się przesunąć.
+  </p>
+
+  <div class="tip red">
+    <b>⚠ Uwaga</b>
+    Edytor otwieraj przez adres strony (http), a nie z pliku na dysku - inaczej nie
+    będzie mógł czytać ani zapisywać stref.
+  </div>
+</section>
+
+<!-- ====================================================== -->
+<section class="card" id="faq">
+  <h2><span class="num">6</span> Szybkie odpowiedzi</h2>
+  <table>
+    <tr><th style="width:290px">Pytanie</th><th>Odpowiedź</th></tr>
+    <tr><td>Zmieniłem czasy i zniknęły po zmianie komputera.</td>
+        <td>To normalne - ustawienia żyją w przeglądarce (sekcja 2). Na nowym komputerze ustaw je ponownie albo poproś o wdrożenie wspólnego <code>strefy.json</code> (dotyczy układu hali).</td></tr>
+    <tr><td>Jak wrócić do ustawień domyślnych?</td>
+        <td>Przycisk <b>↺</b> w nagłówku „Konfiguracja procesu” przywraca domyślne etapy i czasy przejazdów.</td></tr>
+    <tr><td>Symulacja chodzi za wolno.</td>
+        <td>Zmień „Prędkość symulacji” np. na 20× - wyniki liczbowe się nie zmieniają.</td></tr>
+    <tr><td>Skąd czerwone stanowisko na 3D?</td>
+        <td>To bottleneck - najdłuższy efektywny czas. Tam najpierw ustawia się kolejka.</td></tr>
+    <tr><td>Czy mogę mieć więcej/mniej etapów?</td>
+        <td>Tak - „Dodaj etap” / ikona kosza w „Konfiguracji procesu”. Uwaga: czasy policzą się poprawnie, ale animacja 3D przy innej liczbie etapów może wyglądać źle (patrz sekcja 3).</td></tr>
+    <tr><td>Jak przekazać wyniki dalej?</td>
+        <td>„Eksportuj czasy do PDF” - raport z tabelą czasów, bottleneckiem i przepustowością.</td></tr>
+    <tr><td>Kamera w 3D</td>
+        <td>Lewy przycisk myszy = obrót, prawy = przesunięcie, kółko = zoom. Przycisk ↺ przy lupkach resetuje widok.</td></tr>
+  </table>
+</section>
+
+<footer>
+  Linia produkcyjna paczkomatu · dokumentacja ·
+  <a href="./" style="color:var(--blue)">wizualizacja</a> ·
+  <a href="./edytor_stref.html" style="color:var(--blue)">edytor stref</a>
+</footer>
+
+</div>
+</body>
+</html>

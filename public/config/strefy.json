@@ -1,0 +1,33 @@
+{
+  "updatedAt": "2026-07-09T00:00:00.000Z",
+  "sectors": [
+    { "label": "Paleta NOK", "type": "magazyn", "px": 58, "py": 75, "pw": 73, "ph": 70 },
+    { "label": "Kącik czystości", "type": "czystosc", "px": 260, "py": 52, "pw": 39, "ph": 46 },
+    { "label": "Półka", "type": "komponent", "px": 309, "py": 65, "pw": 54, "ph": 72 },
+    { "label": "Ściana", "type": "komponent", "px": 373, "py": 58, "pw": 68, "ph": 55 },
+    { "label": "Kant", "type": "komponent", "px": 440, "py": 58, "pw": 58, "ph": 55 },
+    { "label": "PFB drzwi", "type": "komponent", "px": 615, "py": 63, "pw": 58, "ph": 72 },
+    { "label": "Podmontaż drzwi", "type": "podmontaz", "minutes": 12, "px": 701, "py": 54, "pw": 110, "ph": 55 },
+    { "label": "Drzwi", "type": "komponent", "px": 784, "py": 101, "pw": 51, "ph": 74 },
+    { "label": "Dachy", "type": "komponent", "px": 1048, "py": 67, "pw": 48, "ph": 71 },
+    { "label": "Blendy", "type": "komponent", "px": 1100, "py": 61, "pw": 50, "ph": 55 },
+    { "label": "Blacha koryta", "type": "komponent", "px": 58, "py": 272, "pw": 73, "ph": 55 },
+    { "label": "Regał elem. złączne", "type": "magazyn", "px": 68, "py": 400, "pw": 93, "ph": 140 },
+    { "label": "Paleta NOK", "type": "magazyn", "px": 192, "py": 435, "pw": 55, "ph": 70 },
+    { "label": "Półka", "type": "komponent", "px": 326, "py": 333, "pw": 46, "ph": 91 },
+    { "label": "Ściana", "type": "komponent", "px": 386, "py": 321, "pw": 65, "ph": 65 },
+    { "label": "Strefa napraw", "type": "naprawa", "px": 534, "py": 330, "pw": 157, "ph": 235 },
+    { "label": "Drzwi", "type": "komponent", "px": 782, "py": 256, "pw": 48, "ph": 73 },
+    { "label": "Kącik czystości", "type": "czystosc", "px": 740, "py": 273, "pw": 32, "ph": 38 },
+    { "label": "Podmontaż drzwi", "type": "podmontaz", "minutes": 12, "px": 729, "py": 349, "pw": 56, "ph": 109 },
+    { "label": "PFB drzwi", "type": "komponent", "px": 745, "py": 427, "pw": 91, "ph": 40 },
+    { "label": "Podłoga", "type": "komponent", "px": 916, "py": 301, "pw": 65, "ph": 65 },
+    { "label": "Sufit", "type": "komponent", "px": 985, "py": 301, "pw": 65, "ph": 65 },
+    { "label": "Rama", "type": "komponent", "px": 857, "py": 438, "pw": 52, "ph": 66 },
+    { "label": "Podmontaż podłogi i sufitu", "type": "podmontaz", "minutes": 16, "px": 940, "py": 443, "pw": 110, "ph": 55 },
+    { "label": "Klapa pokrywy", "type": "komponent", "px": 1045, "py": 368, "pw": 88, "ph": 46 },
+    { "label": "Blacha dolna", "type": "komponent", "px": 1031, "py": 439, "pw": 64, "ph": 66 },
+    { "label": "Paleta NOK", "type": "magazyn", "px": 1190, "py": 429, "pw": 60, "ph": 70 },
+    { "label": "Kącik czystości", "type": "czystosc", "px": 1243, "py": 444, "pw": 40, "ph": 40 }
+  ]
+}

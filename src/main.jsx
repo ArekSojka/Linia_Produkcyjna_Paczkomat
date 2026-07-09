@@ -10,15 +10,14 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import {
   Activity,
   Box,
-  CheckCircle2,
   Clock3,
-  DoorOpen,
   FileText,
-  Frame,
   Grid3X3,
+  HelpCircle,
   House,
   LockKeyhole,
   Pause,
+  PencilRuler,
   Plus,
   Play,
   RotateCcw,
@@ -62,65 +61,105 @@ import {
 const baseStages = [
   {
     id: crypto.randomUUID(),
-    name: 'Etap 0: podmontaż koryt',
+    name: 'Etap 1: podmontaż koryt',
     duration: DEFAULT_STAGE_SECONDS,
     color: '#2563eb',
     icon: 'locks',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 1: montaż pionów',
+    name: 'Etap 2: montaż pionów',
     duration: DEFAULT_STAGE_SECONDS,
     color: '#0891b2',
     icon: 'shelves',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 2: montaż drzwi',
+    name: 'Etap 3: montaż drzwi',
     duration: DEFAULT_STAGE_SECONDS,
     color: '#16a34a',
     icon: 'lockers',
   },
   {
     id: crypto.randomUUID(),
-    name: 'Etap 3: włożenie w podstawę, nitowanie + dach',
+    name: 'Etap 4: włożenie w podstawę, nitowanie + dach',
     duration: DEFAULT_STAGE_SECONDS,
     color: '#7c3aed',
     icon: 'finalize',
   },
 ];
 
+// Tylko typy uzywane w aktualnym procesie (stare typy z poprzedniego ukladu
+// linii — podanie koryt, plecy, rama, drzwi, dach, elektronika, test —
+// zostaly usuniete z wyboru; logika animacji rozpoznaje ponizsze wartosci).
 const iconOptions = [
-  { value: 'trough', label: 'Podanie koryt' },
   { value: 'locks', label: 'Koryto i zamki' },
   { value: 'shelves', label: 'Piony i polki' },
-  { value: 'back', label: 'Plecy' },
-  { value: 'frame', label: 'Rama' },
-  { value: 'door', label: 'Drzwi' },
-  { value: 'roof', label: 'Dach' },
   { value: 'lockers', label: 'Skrytki' },
   { value: 'finalize', label: 'Polaczenie, plecy i dachy' },
   { value: 'offline', label: 'Wykonczenie poza linia (palety)' },
-  { value: 'electronics', label: 'Elektronika' },
-  { value: 'test', label: 'Test' },
   { value: 'box', label: 'Montaz' },
 ];
 
 const stageIcons = {
-  trough: Box,
   locks: LockKeyhole,
   shelves: Box,
-  back: Box,
-  frame: Frame,
-  door: DoorOpen,
-  roof: House,
   lockers: Grid3X3,
   finalize: House,
   offline: Truck,
-  electronics: Zap,
-  test: CheckCircle2,
   box: Box,
 };
+
+// --- Zapamietywanie ustawien (bez bazy danych) ---
+// Konfiguracja procesu (etapy, czasy, pracownicy itd.) jest trzymana w
+// localStorage przegladarki: kazdy komputer/przegladarka pamieta swoje
+// ustawienia miedzy odwiedzinami. Strona statyczna nie rozroznia po IP —
+// do wspoldzielenia ustawien miedzy komputerami potrzebny bylby backend.
+const UI_CONFIG_KEY = 'paczkomat_ui_config';
+
+const savedUiConfig = (() => {
+  try {
+    const raw = window.localStorage.getItem(UI_CONFIG_KEY);
+    const data = raw ? JSON.parse(raw) : null;
+    return data && typeof data === 'object' ? data : null;
+  } catch {
+    return null;
+  }
+})();
+
+// Migracja starych domyslnych nazw (numeracja etapow 0-3 -> 1-4) w zapisach
+// z poprzednich wersji aplikacji. Wlasnych nazw uzytkownika nie ruszamy.
+const RENAMED_STAGES = {
+  'Etap 0: podmontaż koryt': 'Etap 1: podmontaż koryt',
+  'Etap 1: montaż pionów': 'Etap 2: montaż pionów',
+  'Etap 2: montaż drzwi': 'Etap 3: montaż drzwi',
+  'Etap 3: włożenie w podstawę, nitowanie + dach': 'Etap 4: włożenie w podstawę, nitowanie + dach',
+};
+
+// Odtwarza zapisane etapy; odrzuca smieci, a nieznane (stare) typy zamienia
+// na 'box', zeby lista wyboru zawsze miala zaznaczona opcje.
+const restoreStages = (saved) => {
+  if (!Array.isArray(saved) || !saved.length) return null;
+  const valid = saved
+    .filter((stage) => stage && typeof stage === 'object')
+    .map((stage) => ({
+      id: typeof stage.id === 'string' && stage.id ? stage.id : crypto.randomUUID(),
+      name: RENAMED_STAGES[stage.name] ?? String(stage.name ?? 'Etap'),
+      duration: clampNumber(stage.duration, DEFAULT_STAGE_SECONDS),
+      color: typeof stage.color === 'string' ? stage.color : '#0f766e',
+      icon: stageIcons[stage.icon] ? stage.icon : 'box',
+    }));
+  return valid.length ? valid : null;
+};
+
+const restoreNumber = (value, fallback, min = -Infinity) => {
+  const parsed = +value;
+  return Number.isFinite(parsed) && parsed >= min ? parsed : fallback;
+};
+
+const restoreNumberArray = (value, fallback) => (
+  Array.isArray(value) && value.length ? value.map((v) => +v) : fallback
+);
 
 const formatTime = (seconds) => {
   if (seconds < 60) return `${seconds.toFixed(1).replace('.0', '')} s`;
@@ -151,7 +190,7 @@ const buildBottleneckRows = (stages, schedule) => {
     const servers = i === offlineStageIndex ? offlineServerCount : 1;
     return {
       index: i,
-      name: stage.name || `Etap ${i}`,
+      name: stage.name || `Etap ${i + 1}`,
       baseDuration: Math.max(stage.baseDuration ?? stage.duration ?? 0, 0),
       duration,
       servers,
@@ -191,9 +230,9 @@ const renderTimesReportHtml = ({ rows, cycleTime, launchInterval, totalTime, thr
   const bn = rows.find((r) => r.index === bnIdx);
   const blocks = [];
   const bnParallel = bn && bn.servers > 1 ? ` (\u00d7${bn.servers} rownolegle, czas/${bn.servers})` : '';
-  blocks.push(`Bottleneck: <span class="bn-tag">Etap ${bnIdx} \u2014 ${esc(bn ? bn.name : "")}</span> (efektywny czas ${f(maxDur)}${bnParallel}) \u2014 tutaj najpierw ustawia sie kolejka.`);
+  blocks.push(`Bottleneck: <span class="bn-tag">Etap ${bnIdx + 1} \u2014 ${esc(bn ? bn.name : "")}</span> (efektywny czas ${f(maxDur)}${bnParallel}) \u2014 tutaj najpierw ustawia sie kolejka.`);
   rows.forEach((r) => {
-    if (r.egressBlock > 0.05) blocks.push(`Miedzy Etapem ${r.index} a ${r.index + 1}: czesc zablokowana <b>${f(r.egressBlock)}</b> (czeka, az zwolni sie dalej).`);
+    if (r.egressBlock > 0.05) blocks.push(`Miedzy Etapem ${r.index + 1} a ${r.index + 2}: czesc zablokowana <b>${f(r.egressBlock)}</b> (czeka, az zwolni sie dalej).`);
   });
   const totalWait = rows.reduce((a, r) => a + r.egressBlock, 0);
   const stageRowsHtml = rows.map((r) => {
@@ -201,7 +240,7 @@ const renderTimesReportHtml = ({ rows, cycleTime, launchInterval, totalTime, thr
     const savedLabel = saved > 0.05 ? `${f(saved)} (${r.baseDuration > 0 ? Math.round(saved / r.baseDuration * 100) : 0}%)` : '\u2014';
     const serversLabel = r.servers > 1 ? `\u00d7${r.servers}` : '1';
     const util = maxDur > 0 ? Math.round(Math.min(100, eff(r) / maxDur * 100)) : 0;
-    return `<tr${r.index === bnIdx ? ' class="bn"' : ''}><td>${r.index}</td><td>${esc(r.name)}${r.isOffline ? ' <span class="off-tag">poza linia</span>' : ''}</td><td>${serversLabel}</td><td>${r.workerCount ?? '\u2014'}</td><td>${f(r.baseDuration)}</td><td>${f(r.duration)}</td><td>${savedLabel}</td><td>${r.travelOut != null ? f(r.travelOut) : '\u2014'}</td><td>${r.egressBlock > 0.05 ? f(r.egressBlock) : '\u2014'}</td><td>${util}%</td></tr>`;
+    return `<tr${r.index === bnIdx ? ' class="bn"' : ''}><td>${r.index + 1}</td><td>${esc(r.name)}${r.isOffline ? ' <span class="off-tag">poza linia</span>' : ''}</td><td>${serversLabel}</td><td>${r.workerCount ?? '\u2014'}</td><td>${f(r.baseDuration)}</td><td>${f(r.duration)}</td><td>${savedLabel}</td><td>${r.travelOut != null ? f(r.travelOut) : '\u2014'}</td><td>${r.egressBlock > 0.05 ? f(r.egressBlock) : '\u2014'}</td><td>${util}%</td></tr>`;
   }).join('');
   const blocksHtml = blocks.length ? `<ul>${blocks.map((b) => `<li>${b}</li>`).join('')}</ul>` : `<p class="ok">Brak istotnych blokad \u2014 przy obecnych czasach linia jest zbalansowana.</p>`;
   return `<!DOCTYPE html><html lang="pl"><head><meta charset="utf-8"><title>Raport czasow linii \u2014 paczkomat</title>
@@ -793,6 +832,7 @@ function TravelTimeEditor({
   return (
     <div className="travel-editor">
       <div className="mini-heading">
+        <span>Rolotok</span>
         <strong>Czas przejazdu miedzy etapami</strong>
       </div>
       {stages.slice(0, conveyorTravelCount).map((stage, index) => {
@@ -814,7 +854,7 @@ function TravelTimeEditor({
         <>
           <label className="travel-row">
             <span>
-              Dojazd palety na stanowisko offline (etap {stages.length - 1})
+              Dojazd palety na stanowisko offline (etap {stages.length})
             </span>
             <MinutesSecondsFields
               totalSeconds={offlinePalletTravel ?? 6}
@@ -883,7 +923,7 @@ function WorkersEditor({
       {stages.map((stage, index) => (
         <React.Fragment key={stage.id}>
           <label className="worker-row">
-            <span>{stage.name || `Etap ${index}`}</span>
+            <span>{stage.name || `Etap ${index + 1}`}</span>
             <input
               type="number"
               min="1"
@@ -1209,7 +1249,7 @@ function sectorRoundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-// Etykiety i czasy stacji linii glownej wg planu hali (indeks = nasz etap 0-4).
+// Etykiety i czasy stacji linii glownej wg planu hali (indeks 0-3 = etap 1-4).
 const MAINLINE_SECTORS = [
   { label: 'Podmontaż koryt', minutes: null },
   { label: 'Montaż pionów', minutes: 15 },
@@ -1319,8 +1359,11 @@ const SECTOR_COLORS = {
 // rysunku: px = wzdluz linii (lewo->prawo), py = w poprzek (gora->dol),
 // pw/ph = rozmiar prostokata w planie (px). Przeliczane na swiat w
 // buildPeripheralSectors przez planCX/planCY/planZScale/planXScale.
-const PLAN_SECTORS = [
-  // Ustawione recznie w edytorze stref (edytor_stref.html).
+//
+// ZRODLO PRAWDY: public/config/strefy.json — edytowalne w /edytor_stref.html
+// bez przebudowy aplikacji. Ponizsza tablica to tylko awaryjny fallback,
+// gdy pliku JSON nie da sie wczytac.
+const DEFAULT_PLAN_SECTORS = [
   { label: 'Paleta NOK', type: 'magazyn', px: 58, py: 75, pw: 73, ph: 70 },
   { label: 'Kącik czystości', type: 'czystosc', px: 260, py: 52, pw: 39, ph: 46 },
   { label: 'Półka', type: 'komponent', px: 309, py: 65, pw: 54, ph: 72 },
@@ -1350,6 +1393,64 @@ const PLAN_SECTORS = [
   { label: 'Paleta NOK', type: 'magazyn', px: 1190, py: 429, pw: 60, ph: 70 },
   { label: 'Kącik czystości', type: 'czystosc', px: 1243, py: 444, pw: 40, ph: 40 },
 ];
+
+// --- Automatyczne wczytywanie stref (bez wklejania kodu z edytora) ---
+// Priorytet: nowszy z pary (zapis edytora w localStorage, plik strefy.json).
+// Edytor nadaje tez zmiany na zywo przez BroadcastChannel — scena przebudowuje
+// sie natychmiast, bez przeladowania strony.
+const SECTORS_JSON_URL = '/config/strefy.json';
+const SECTORS_STORAGE_KEY = 'paczkomat_plan_sectors';
+const SECTORS_CHANNEL_NAME = 'paczkomat-strefy';
+let PLAN_SECTORS = DEFAULT_PLAN_SECTORS;
+
+// Waliduje dane z JSON/edytora; zwraca null, gdy format jest nie do uzycia.
+const sanitizeSectors = (list) => {
+  if (!Array.isArray(list)) return null;
+  const out = list
+    .filter((s) => s && typeof s === 'object' && Number.isFinite(+s.px) && Number.isFinite(+s.py))
+    .map((s) => ({
+      label: String(s.label ?? ''),
+      type: String(s.type ?? 'komponent'),
+      ...(s.minutes != null && Number.isFinite(+s.minutes) ? { minutes: +s.minutes } : {}),
+      ...(typeof s.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(s.color) ? { color: s.color } : {}),
+      px: +s.px,
+      py: +s.py,
+      pw: Math.max(12, +s.pw || 60),
+      ph: Math.max(12, +s.ph || 60),
+    }));
+  return out.length ? out : null;
+};
+
+const readStoredSectors = () => {
+  try {
+    const raw = window.localStorage.getItem(SECTORS_STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    const sectors = sanitizeSectors(data.sectors);
+    if (!sectors) return null;
+    return { savedAt: Date.parse(data.savedAt ?? '') || 0, sectors };
+  } catch {
+    return null;
+  }
+};
+
+const loadPlanSectors = async () => {
+  const stored = readStoredSectors();
+  let fileSectors = null;
+  let fileUpdatedAt = 0;
+  try {
+    const res = await fetch(SECTORS_JSON_URL, { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      fileSectors = sanitizeSectors(data.sectors ?? data);
+      fileUpdatedAt = Date.parse(data.updatedAt ?? '') || 0;
+    }
+  } catch {
+    // Brak pliku / brak sieci — uzyjemy zapisu edytora albo domyslnych.
+  }
+  if (stored && stored.savedAt >= fileUpdatedAt) return stored.sectors;
+  return fileSectors ?? stored?.sectors ?? DEFAULT_PLAN_SECTORS;
+};
 
 // Bufor podstaw na koncu linii - strefa magazynowa z siatka miejsc na palety.
 function buildBufferGrid(group, xCenter, zCenter, s) {
@@ -1423,7 +1524,8 @@ function buildPeripheralSectors(group, routePoints, s) {
     const zone = createSectorZone({
       label: def.label,
       sublabel: def.minutes ? `${def.minutes} min` : '',
-      color: SECTOR_COLORS[def.type] ?? SECTOR_COLORS.magazyn,
+      // Kolor wlasny strefy (z edytora) ma pierwszenstwo przed kolorem typu.
+      color: def.color ?? SECTOR_COLORS[def.type] ?? SECTOR_COLORS.magazyn,
       width: (def.ph ?? 60) * xS,  // w poprzek (X)
       depth: (def.pw ?? 60) * zS,  // wzdluz (Z)
       opacity: s.opacity ?? 0.22,
@@ -3084,7 +3186,7 @@ function ThreeProductionScene({
         routePoints.forEach((point, index) => {
           const stage = latestRef.current.stages[index];
           const def = MAINLINE_SECTORS[index] ?? {
-            label: stage?.name ?? `Etap ${index}`,
+            label: stage?.name ?? `Etap ${index + 1}`,
             minutes: null,
           };
           const isBottleneck = index === bnIndex;
@@ -3458,6 +3560,28 @@ function ThreeProductionScene({
     ro.observe(mount);
     resize();
     rebuildStatic();
+
+    // Strefy hali: wczytaj z /config/strefy.json (lub zapisu edytora) i
+    // przebudowuj scene na zywo, gdy edytor_stref.html zapisze zmiany.
+    const applySectors = (sectors) => {
+      if (disposed || !sectors) return;
+      PLAN_SECTORS = sectors;
+      // Diagnostyka w konsoli: ktore strefy sa aktualnie aktywne.
+      window.__PLAN_SECTORS = sectors;
+      rebuildStatic();
+    };
+    loadPlanSectors().then(applySectors);
+    const sectorsChannel = typeof BroadcastChannel !== 'undefined'
+      ? new BroadcastChannel(SECTORS_CHANNEL_NAME)
+      : null;
+    if (sectorsChannel) {
+      sectorsChannel.onmessage = (event) => applySectors(sanitizeSectors(event.data?.sectors));
+    }
+    const onSectorsStorage = (event) => {
+      if (event.key !== SECTORS_STORAGE_KEY) return;
+      applySectors(readStoredSectors()?.sectors ?? DEFAULT_PLAN_SECTORS);
+    };
+    window.addEventListener('storage', onSectorsStorage);
 
     const dracoLoader = new DRACOLoader();
     dracoLoader.setDecoderPath('/draco/');
@@ -4301,6 +4425,8 @@ function ThreeProductionScene({
       disposed = true;
       cancelAnimationFrame(frame);
       ro.disconnect();
+      sectorsChannel?.close();
+      window.removeEventListener('storage', onSectorsStorage);
       window.removeEventListener('keydown', onMoveKeyDown);
       window.removeEventListener('keyup', onMoveKeyUp);
       window.removeEventListener('blur', clearMoveKeys);
@@ -4329,6 +4455,20 @@ function ThreeProductionScene({
           title="Resetuj pozycje kamery"
         >
           <RotateCcw size={17} />
+        </button>
+        <button
+          type="button"
+          onClick={() => window.open('/edytor_stref.html', '_blank', 'noopener')}
+          title="Edytor stref hali — zmiany widac tu na zywo"
+        >
+          <PencilRuler size={17} />
+        </button>
+        <button
+          type="button"
+          onClick={() => window.open('/dokumentacja.html', '_blank', 'noopener')}
+          title="Dokumentacja dla inzynierow"
+        >
+          <HelpCircle size={17} />
         </button>
       </div>
       <div
@@ -4489,23 +4629,42 @@ function ProductionLine({
 }
 
 function App() {
-  const [unitCount, setUnitCount] = useState(2);
-  const [stages, setStages] = useState(baseStages);
+  // Stan startowy odtwarzany z localStorage (patrz UI_CONFIG_KEY) — strona
+  // pamieta ustawienia uzytkownika miedzy odwiedzinami bez zadnej bazy danych.
+  const [unitCount, setUnitCount] = useState(
+    () => Math.max(1, Math.floor(restoreNumber(savedUiConfig?.unitCount, 2, 1))),
+  );
+  const [stages, setStages] = useState(() => restoreStages(savedUiConfig?.stages) ?? baseStages);
   const [elapsed, setElapsed] = useState(0);
-  const [speedMultiplier, setSpeedMultiplier] = useState(1);
+  const [speedMultiplier, setSpeedMultiplier] = useState(
+    () => restoreNumber(savedUiConfig?.speedMultiplier, 1, 0.01),
+  );
   const speedRef = useRef(1);
   speedRef.current = speedMultiplier;
-  const [travelTimes, setTravelTimes] = useState(() => getDefaultTravelTimes(baseStages));
-  const [offlinePalletTravel, setOfflinePalletTravel] = useState(
-    () => TUNE.offline?.palletTravel ?? 6,
+  const [travelTimes, setTravelTimes] = useState(
+    () => restoreNumberArray(savedUiConfig?.travelTimes, getDefaultTravelTimes(baseStages)),
   );
-  const [workersPerStation, setWorkersPerStation] = useState(() => baseStages.map(() => 1));
+  const [offlinePalletTravel, setOfflinePalletTravel] = useState(
+    () => restoreNumber(savedUiConfig?.offlinePalletTravel, TUNE.offline?.palletTravel ?? 6, 0),
+  );
+  const [workersPerStation, setWorkersPerStation] = useState(
+    () => restoreNumberArray(savedUiConfig?.workersPerStation, baseStages.map(() => 1)),
+  );
   // Liczba pracownikow WIZUALNIE na kazdym z rownoleglych stanowisk offline
   // (etap 4) osobno - Stanowisko 1 i Stanowisko 2 moga miec inna liczbe.
   // Czysto wizualne: czas etapu 4 nadal liczy sie z workersPerStation (jeden
   // wspolny mnoznik dla calego etapu), tu tylko ile sylwetek sie pokazuje.
-  const [offlineStationWorkers, setOfflineStationWorkers] = useState(() => [1, 1]);
-  const [workerEffect, setWorkerEffect] = useState(DEFAULT_WORKER_EFFECT);
+  const [offlineStationWorkers, setOfflineStationWorkers] = useState(
+    () => restoreNumberArray(savedUiConfig?.offlineStationWorkers, [1, 1]),
+  );
+  const [workerEffect, setWorkerEffect] = useState(() => (
+    savedUiConfig?.workerEffect && typeof savedUiConfig.workerEffect === 'object'
+      ? {
+        mode: savedUiConfig.workerEffect.mode === 'seconds' ? 'seconds' : 'percent',
+        value: restoreNumber(savedUiConfig.workerEffect.value, DEFAULT_WORKER_EFFECT.value, 0),
+      }
+      : DEFAULT_WORKER_EFFECT
+  ));
   const [stopwatchRunning, setStopwatchRunning] = useState(false);
   const [stopwatchElapsed, setStopwatchElapsed] = useState(0);
   const [measuredPartLength, setMeasuredPartLength] = useState(
@@ -4513,6 +4672,38 @@ function App() {
   );
   const stopwatchStartRef = useRef(0);
   const stopwatchBaseRef = useRef(0);
+
+  // Auto-zapis konfiguracji do localStorage (odtwarzana przy nastepnym
+  // otwarciu strony). Debounce 400 ms, zeby nie zapisywac co klawisz.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        window.localStorage.setItem(UI_CONFIG_KEY, JSON.stringify({
+          savedAt: new Date().toISOString(),
+          unitCount,
+          stages,
+          speedMultiplier,
+          travelTimes,
+          offlinePalletTravel,
+          workersPerStation,
+          offlineStationWorkers,
+          workerEffect,
+        }));
+      } catch {
+        // np. tryb prywatny / pelny magazyn — dzialamy dalej bez zapisu
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [
+    unitCount,
+    stages,
+    speedMultiplier,
+    travelTimes,
+    offlinePalletTravel,
+    workersPerStation,
+    offlineStationWorkers,
+    workerEffect,
+  ]);
 
   const normalizedBaseStages = useMemo(
     () =>
@@ -4594,7 +4785,7 @@ function App() {
   let kpiBnIdx = -1, kpiBnMax = -1;
   normalizedStages.forEach((st, i) => { const e = effDuration(st, i); if (e > kpiBnMax) { kpiBnMax = e; kpiBnIdx = i; } });
   const stageUtilization = normalizedStages.map((st, i) => ({
-    name: st.name || `Etap ${i}`,
+    name: st.name || `Etap ${i + 1}`,
     pct: kpiBnMax > 0 ? Math.min(100, (effDuration(st, i) / kpiBnMax) * 100) : 0,
     isBottleneck: i === kpiBnIdx,
     servers: stageServers(i),

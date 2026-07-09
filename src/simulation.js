@@ -457,9 +457,9 @@ export const getTravelDurations = (stagesOrCount) => {
   });
 };
 
-// Domyslny czas dojazdu miedzy etapami = 2 s (mozna zmienic w UI / Tasmociag).
+// Domyslny czas dojazdu miedzy etapami = 2 s (mozna zmienic w UI / Rolotok).
 export const DEFAULT_TRAVEL_SECONDS = 2;
-// Domyslne czasy przejazdu kolejnych przejazdow ROLOTOKU: E0->E1, E1->E2, E2->E3.
+// Domyslne czasy przejazdu kolejnych przejazdow ROLOTOKU: E1->E2, E2->E3, E3->E4.
 // (Dojazd palety na etap offline jest osobny: TUNE.offline.palletTravel.)
 export const DEFAULT_TRAVEL_TIMES = [3, 7, 3];
 export const getDefaultTravelTimes = (stagesOrCount) =>
