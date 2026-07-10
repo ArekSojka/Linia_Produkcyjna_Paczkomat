@@ -90,7 +90,7 @@ const baseStages = [
 ];
 
 // Tylko typy uzywane w aktualnym procesie (stare typy z poprzedniego ukladu
-// linii — podanie koryt, plecy, rama, drzwi, dach, elektronika, test —
+// linii, czyli podanie koryt, plecy, rama, drzwi, dach, elektronika i test,
 // zostaly usuniete z wyboru; logika animacji rozpoznaje ponizsze wartosci).
 const iconOptions = [
   { value: 'locks', label: 'Koryto i zamki' },
@@ -113,7 +113,7 @@ const stageIcons = {
 // --- Zapamietywanie ustawien (bez bazy danych) ---
 // Konfiguracja procesu (etapy, czasy, pracownicy itd.) jest trzymana w
 // localStorage przegladarki: kazdy komputer/przegladarka pamieta swoje
-// ustawienia miedzy odwiedzinami. Strona statyczna nie rozroznia po IP —
+// ustawienia miedzy odwiedzinami. Strona statyczna nie rozroznia po IP;
 // do wspoldzielenia ustawien miedzy komputerami potrzebny bylby backend.
 const UI_CONFIG_KEY = 'paczkomat_ui_config';
 
@@ -270,8 +270,8 @@ const renderTimesReportHtml = ({ rows, cycleTime, launchInterval, totalTime, thr
   </div>
   <h2>Etapy i czasy</h2>
   <table><thead><tr><th>#</th><th>Etap</th><th>Stan.</th><th>Prac.</th><th>Czas bazowy</th><th>Czas po obsadzie</th><th>Oszczednosc</th><th>Przejazd do nastepnego</th><th>Blokada za etapem</th><th>Wykorzystanie</th></tr></thead><tbody>${stageRowsHtml}</tbody></table>
-  <p class="sub" style="margin-top:4px">Kolumna „Stan." = liczba rownoleglych stanowisk (etap wykonczeniowy poza linia ma ×N — N palet/stanowisk pracuje jednoczesnie, wiec jego efektywny czas i obciazenie sa N-krotnie mniejsze).</p>
-  <p class="sub" style="margin-top:4px">Wykorzystanie pokazuje, jak bardzo stanowisko jest obciążone względem najbardziej obciążonego (100%). Stanowisko ze 100% narzuca tempo linii; mniej = ma zapas i czeka. Najlepiej, gdy wszędzie jest blisko 100% — praca równo rozłożona.</p>
+  <p class="sub" style="margin-top:4px">Kolumna „Stan." = liczba rownoleglych stanowisk (etap wykonczeniowy poza linia ma ×N: N palet/stanowisk pracuje jednoczesnie, wiec jego efektywny czas i obciazenie sa N-krotnie mniejsze).</p>
+  <p class="sub" style="margin-top:4px">Wykorzystanie pokazuje, jak bardzo stanowisko jest obciążone względem najbardziej obciążonego (100%). Stanowisko ze 100% narzuca tempo linii; mniej = ma zapas i czeka. Najlepiej, gdy wszędzie jest blisko 100%, czyli praca jest równo rozłożona.</p>
   <h2>Blokady / oczekiwania</h2>
   ${blocksHtml}
   <p class="sub" style="margin-top:6px">Suma oczekiwan na jedna czesc (stan ustalony): ${f(totalWait)}.</p>
@@ -539,7 +539,7 @@ const getVisibleUnitsFromSchedule = (schedule, elapsed, stageCount, lane = 'lead
 
     // Etap offline (poza rolotokiem): dojazd palety, praca na stanowisku i
     // prezentacja/odjazd. Renderujemy palete TYLKO z toru 'lead' (caly,
-    // sparowany paczkomat jedzie na jednej palecie — bez duplikatu z toru trail).
+    // sparowany paczkomat jedzie na jednej palecie, bez duplikatu z toru trail).
     if (segment.type === 'palletTravel' || segment.type === 'offline' || segment.type === 'offlineDone') {
       if (lane === 'trail') return;
       const dur = Math.max(segment.duration, 0.1);
@@ -1063,7 +1063,7 @@ function Metrics({
       <div style={{ margin: '10px 0' }}>
         <div style={{ fontSize: 12, color: 'var(--muted, #94a3b8)', marginBottom: 2 }}>Wykorzystanie stanowisk</div>
         <div style={{ fontSize: 11, color: 'var(--muted, #94a3b8)', opacity: 0.85, marginBottom: 8, lineHeight: 1.4 }}>
-          100% = najbardziej obciążone stanowisko (czerwone) — ono narzuca tempo całej linii. Mniej niż 100% = stanowisko kończy wcześniej i czeka. Najlepiej, gdy wszędzie jest blisko 100% (praca równo rozłożona).
+          100% = najbardziej obciążone stanowisko (czerwone). Ono narzuca tempo całej linii. Mniej niż 100% = stanowisko kończy wcześniej i czeka. Najlepiej, gdy wszędzie jest blisko 100% (praca równo rozłożona).
         </div>
         {(stageUtilization ?? []).map((u, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '5px 0', fontSize: 12 }}>
@@ -1360,7 +1360,7 @@ const SECTOR_COLORS = {
 // pw/ph = rozmiar prostokata w planie (px). Przeliczane na swiat w
 // buildPeripheralSectors przez planCX/planCY/planZScale/planXScale.
 //
-// ZRODLO PRAWDY: public/config/strefy.json — edytowalne w /edytor_stref.html
+// ZRODLO PRAWDY: public/config/strefy.json (edytowalne w /edytor_stref.html)
 // bez przebudowy aplikacji. Ponizsza tablica to tylko awaryjny fallback,
 // gdy pliku JSON nie da sie wczytac.
 const DEFAULT_PLAN_SECTORS = [
@@ -1396,7 +1396,7 @@ const DEFAULT_PLAN_SECTORS = [
 
 // --- Automatyczne wczytywanie stref (bez wklejania kodu z edytora) ---
 // Priorytet: nowszy z pary (zapis edytora w localStorage, plik strefy.json).
-// Edytor nadaje tez zmiany na zywo przez BroadcastChannel — scena przebudowuje
+// Edytor nadaje tez zmiany na zywo przez BroadcastChannel, a scena przebudowuje
 // sie natychmiast, bez przeladowania strony.
 const SECTORS_JSON_URL = '/config/strefy.json';
 const SECTORS_STORAGE_KEY = 'paczkomat_plan_sectors';
@@ -1446,7 +1446,7 @@ const loadPlanSectors = async () => {
       fileUpdatedAt = Date.parse(data.updatedAt ?? '') || 0;
     }
   } catch {
-    // Brak pliku / brak sieci — uzyjemy zapisu edytora albo domyslnych.
+    // Brak pliku / brak sieci: uzyjemy zapisu edytora albo domyslnych.
   }
   if (stored && stored.savedAt >= fileUpdatedAt) return stored.sectors;
   return fileSectors ?? stored?.sectors ?? DEFAULT_PLAN_SECTORS;
@@ -2669,7 +2669,7 @@ function updateTwoPartLockerModel(
   // 'lead' = modul 0 + podstawa (czolo paczkomatu). 'trail' = tylko modul 1.
   // PODSTAWA jest zawsze widoczna z liderem (etap 3 = wlozenie w podstawe).
   // Czesci WYKONCZENIOWE (plecy, laczenie, dach, daszek) tylko gdy showFinishing
-  // (stanowisko offline, etap 4) — na rolotoku pozostaja ukryte.
+  // (stanowisko offline, etap 4); na rolotoku pozostaja ukryte.
   const sharedBase = [parts.base, parts.baseFront];
   const finishingParts = [parts.backPanel, parts.centerJoin];
   if (halfMode === 'trail') {
@@ -2855,7 +2855,7 @@ function createTiltTableRig({ width, thickness, slabMinZ, slabTopY, hingeY = 0.4
 // Placeholder europalety z belek (BoxGeometry). Latwy do podmiany na GLB:
 // wystarczy zastapic geometrie wczytanym modelem (TUNE.offline.pallet steruje
 // rozmiarem/kolorem). Zwraca Group z paleta wysrodkowana w (0,0,0), gornym
-// licem na wysokosci `height` — paczkomat stawiamy na `height`.
+// licem na wysokosci `height`, wiec paczkomat stawiamy na `height`.
 function createPalletPlaceholder(cfg = {}) {
   const width = cfg.width ?? 2.6;
   const depth = cfg.depth ?? 3.2;
@@ -2907,7 +2907,7 @@ function getOfflineStationVectors(routePoints) {
 
 // Pozycja palety na KONCU rolotoku (na ziemi, ZA ostatnia stacja). Ostatnia
 // stacja jest pod podniesiona tasma, wiec paleta stoi dalej wzdluz linii o
-// TUNE.offline.endPalletGap — tam spuszczane sa gotowe paczkomaty na palete.
+// TUNE.offline.endPalletGap; tam spuszczane sa gotowe paczkomaty na palete.
 function getEndPalletVector(routePoints) {
   if (!routePoints?.length) return new THREE.Vector3();
   const end = routePoints[routePoints.length - 1];
@@ -3067,7 +3067,7 @@ function ThreeProductionScene({
     let lastFittedStageCount = -1;
     let routePoints = [];
     let routeCenter = new THREE.Vector3(0, 0, 0);
-    // Pozycje stanowisk offline (etap 4) — ustawiane w rebuildStatic, czytane w
+    // Pozycje stanowisk offline (etap 4): ustawiane w rebuildStatic, czytane w
     // petli renderu przy animacji palet. Pusta tablica = offline wylaczony.
     let offlineStationVecs = [];
     let endPalletStandby = null;
@@ -3281,7 +3281,7 @@ function ThreeProductionScene({
           });
         }
 
-        // Paleta na koncu rolotoku — na ziemi ZA ostatnia stacja (nie pod
+        // Paleta na koncu rolotoku: na ziemi ZA ostatnia stacja (nie pod
         // tasma), tam spuszczane sa gotowe paczkomaty na palete na etapie 3.
         // NIEZALEZNA od etapu offline: stoi zawsze, gdy ostatnia stacja
         // rolotoku to 'finalize' (nitowanie + dach odbywa sie tez na niej).
@@ -4128,7 +4128,7 @@ function ThreeProductionScene({
           // Wykonczenie (dach/daszek/plecy/laczenie) pojawia sie w trakcie pracy.
           finalizeFrac = 0.78 + 0.22 * THREE.MathUtils.clamp((unit.progress ?? 0) / 100, 0, 1);
           showFinishing = finalizeFrac > 0.8;
-        } else { // 'offlineDone' — gotowa paleta odjezdza ze stanowiska
+        } else { // 'offlineDone': gotowa paleta odjezdza ze stanowiska
           const t = easeOut(THREE.MathUtils.clamp((unit.travelProgress ?? 0) / 100, 0, 1));
           palletPos = stationVec.clone().addScaledVector(forward, t * (off.leaveDistance ?? 9));
           finalizeFrac = 1;
@@ -4459,7 +4459,7 @@ function ThreeProductionScene({
         <button
           type="button"
           onClick={() => window.open('/edytor_stref.html', '_blank', 'noopener')}
-          title="Edytor stref hali — zmiany widac tu na zywo"
+          title="Edytor stref hali (zmiany widac tu na zywo)"
         >
           <PencilRuler size={17} />
         </button>
@@ -4629,7 +4629,7 @@ function ProductionLine({
 }
 
 function App() {
-  // Stan startowy odtwarzany z localStorage (patrz UI_CONFIG_KEY) — strona
+  // Stan startowy odtwarzany z localStorage (patrz UI_CONFIG_KEY), dzieki czemu strona
   // pamieta ustawienia uzytkownika miedzy odwiedzinami bez zadnej bazy danych.
   const [unitCount, setUnitCount] = useState(
     () => Math.max(1, Math.floor(restoreNumber(savedUiConfig?.unitCount, 2, 1))),
@@ -4690,7 +4690,7 @@ function App() {
           workerEffect,
         }));
       } catch {
-        // np. tryb prywatny / pelny magazyn — dzialamy dalej bez zapisu
+        // np. tryb prywatny / pelny magazyn; dzialamy dalej bez zapisu
       }
     }, 400);
     return () => clearTimeout(timer);
@@ -4777,7 +4777,7 @@ function App() {
   const throughputPerShift = throughputPerHour * 8;
   // Bottleneck i wykorzystanie liczone z EFEKTYWNEGO czasu etapu = czas / liczba
   // rownoleglych serwerow. Etap offline ma N stanowisk, wiec jego efektywny czas
-  // (a wiec i obciazenie) jest N-krotnie mniejszy — 2 stanowiska = 2x przepustowosc.
+  // (a wiec i obciazenie) jest N-krotnie mniejszy: 2 stanowiska = 2x przepustowosc.
   const offlineStageIndex = productionSchedule.offlineStageIndex ?? -1;
   const offlineServerCount = productionSchedule.offlineServerCount ?? 1;
   const stageServers = (i) => (i === offlineStageIndex ? Math.max(offlineServerCount, 1) : 1);

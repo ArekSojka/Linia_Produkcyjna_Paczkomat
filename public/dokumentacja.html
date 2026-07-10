@@ -109,13 +109,13 @@
   <div class="figure">
     <img src="docs/modele-glb.png" alt="Wskaźnik Modele GLB aktywne" style="max-width:220px" />
   </div>
-  <p><b>GLB</b> to format plików 3D — w nich zapisane są rzeczywiste modele CAD części
+  <p><b>GLB</b> to format plików 3D. W nich zapisane są rzeczywiste modele CAD części
      paczkomatu (koryta, zamki, ściany, drzwi, dach…). Wskaźnik w prawym górnym rogu
      mówi, czy udało się je pobrać:</p>
   <ul>
-    <li><b>„Ladowanie modeli GLB”</b> — modele jeszcze się pobierają (chwila po otwarciu strony).</li>
-    <li><b style="color:var(--green)">„Modele GLB aktywne”</b> — wszystko OK, w scenie widzisz prawdziwe części CAD.</li>
-    <li><b style="color:var(--red)">„Model GLB niedostepny”</b> — modeli nie dało się pobrać (np. słaba sieć);
+    <li><b>„Ladowanie modeli GLB”</b>: modele jeszcze się pobierają (chwila po otwarciu strony).</li>
+    <li><b style="color:var(--green)">„Modele GLB aktywne”</b>: wszystko OK, w scenie widzisz prawdziwe części CAD.</li>
+    <li><b style="color:var(--red)">„Model GLB niedostepny”</b>: modeli nie dało się pobrać (np. słaba sieć);
         aplikacja pokazuje wtedy uproszczone bryły zastępcze, ale <b>symulacja i wszystkie
         obliczenia czasów działają normalnie</b>.</li>
   </ul>
@@ -180,7 +180,7 @@
 <!-- ====================================================== -->
 <section class="card" id="stanowiska">
   <h2><span class="num">3</span> Linia i stanowiska</h2>
-  <p class="lead">Paczkomat jedzie rolotokiem przez 4 stanowiska. Linia kończy się na etapie 4 —
+  <p class="lead">Paczkomat jedzie rolotokiem przez 4 stanowiska. Linia kończy się na etapie 4:
      postawienie na podstawę, nitowanie i montaż dachu.</p>
 
   <div class="figure">
@@ -204,7 +204,7 @@
         <rect x="412" y="106" width="6" height="44" rx="3"/><rect x="442" y="106" width="6" height="44" rx="3"/>
         <rect x="466" y="106" width="6" height="44" rx="3"/>
       </g>
-      <text x="380" y="94" text-anchor="middle" font-size="12" font-weight="700" fill="#b45309">BUFOR (przelot) — szare rolki</text>
+      <text x="380" y="94" text-anchor="middle" font-size="12" font-weight="700" fill="#b45309">BUFOR (przelot), szare rolki</text>
       <!-- kierunek -->
       <line x1="30" y1="70" x2="670" y2="70" stroke="#64748b" stroke-width="2" marker-end="url(#arr2)"/>
       <text x="345" y="62" text-anchor="middle" font-size="12" fill="#475569">kierunek produkcji →</text>
@@ -231,7 +231,7 @@
         <text x="640" y="218" font-size="11" fill="#4c1d95">nitowanie + dach</text>
         <line x1="640" y1="170" x2="640" y2="156" stroke="#7c3aed" stroke-width="2"/>
       </g>
-      <text x="350" y="256" text-anchor="middle" font-size="12" fill="#64748b">Za E4 gotowy paczkomat schodzi z linii — koniec symulacji.</text>
+      <text x="350" y="256" text-anchor="middle" font-size="12" fill="#64748b">Za E4 gotowy paczkomat schodzi z linii i tu kończy się symulacja.</text>
       <defs>
         <marker id="arr2" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
           <path d="M0,0 L9,4.5 L0,9 Z" fill="#64748b"/>
@@ -249,7 +249,7 @@
         <td>Piony i półki - powstaje szkielet skrytek.</td></tr>
     <tr><td><span class="pill" style="background:var(--amber)">Bufor</span></td>
         <td>Odcinek przelotowy między E2 a E3. Gotowe sztuki czekają tu, aż zwolni się E3.
-            <b>W wizualizacji 3D poznasz go po szarym kolorze rolek</b> — reszta rolotoku ma rolki jasne.</td></tr>
+            <b>W wizualizacji 3D poznasz go po szarym kolorze rolek</b>; reszta rolotoku ma rolki jasne.</td></tr>
     <tr><td><span class="pill" style="background:var(--purple)">E3</span> Montaż drzwi</td>
         <td>Montaż drzwi skrytek.</td></tr>
     <tr><td><span class="pill" style="background:var(--purple)">E4</span> Włożenie w podstawę</td>
@@ -260,16 +260,16 @@
   <h3>Konfiguracja procesu (lewy panel)</h3>
   <div class="figure">
     <img src="docs/konfiguracja-procesu.png" alt="Panel Konfiguracja procesu" style="max-width:520px" />
-    <figcaption>Panel „Konfiguracja procesu” — nazwa, czas bazowy, kolor i typ każdego etapu.</figcaption>
+    <figcaption>Panel „Konfiguracja procesu”: nazwa, czas bazowy, kolor i typ każdego etapu.</figcaption>
   </div>
   <p>Każdy etap ma <b>nazwę, czas bazowy, kolor i typ</b>. Typ decyduje o animacji w 3D
      (np. „Koryto i zamki”, „Piony i polki”, „Skrytki”…). Przycisk ↺ przywraca domyślny proces.</p>
 
   <div class="tip red">
-    <b>⚠ Dodawanie własnych etapów — ważne</b>
+    <b>⚠ Dodawanie własnych etapów (ważne)</b>
     Możesz dodawać i usuwać etapy („Dodaj etap” / ikona kosza) i <b>wszystkie czasy oraz
     metryki policzą się poprawnie</b>. Ale animacja 3D jest zbudowana pod domyślny proces
-    (4 etapy) — przy innej liczbie etapów <b>wizualizacja montażu może wyglądać źle</b>
+    (4 etapy), więc przy innej liczbie etapów <b>wizualizacja montażu może wyglądać źle</b>
     (np. części pojawiają się w złym momencie). To tylko efekt wizualny; wynikom liczbowym
     można ufać.
   </div>
@@ -356,9 +356,9 @@
     <li>wnioski: który etap jest bottleneckiem i gdzie sztuki czekają.</li>
   </ul>
   <ol class="steps">
-    <li>Kliknij <b>„Eksportuj czasy do PDF”</b> — raport otworzy się w nowej karcie
+    <li>Kliknij <b>„Eksportuj czasy do PDF”</b>. Raport otworzy się w nowej karcie
         i pojawi się okno drukowania.</li>
-    <li>W polu drukarki wybierz <b>„Zapisz jako PDF”</b> i kliknij Zapisz — gotowe.</li>
+    <li>W polu drukarki wybierz <b>„Zapisz jako PDF”</b> i kliknij Zapisz. Gotowe.</li>
   </ol>
   <div class="tip">
     <b>💡 Nie otwiera się?</b>

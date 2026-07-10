@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Edytor stref hali — paczkomat</title>
+<title>Edytor stref hali (paczkomat)</title>
 <style>
   :root { --bg:#0f172a; --panel:#1e293b; --line:#334155; --txt:#e2e8f0; --muted:#94a3b8; }
   * { box-sizing: border-box; }
@@ -68,8 +68,8 @@
   <label class="sw">krycie <input type="range" id="bgop" min="0" max="100" value="55" style="width:70px"/></label>
   <label class="sw" title="Wizualizacja 3D (otwarta w drugiej karcie) aktualizuje się w trakcie edycji">
     <input type="checkbox" id="live" checked /> podgląd na żywo</label>
-  <button class="primary" id="save" title="Zapisuje strefy w przeglądarce — wizualizacja użyje ich od razu i po każdym otwarciu">💾 Zapisz do aplikacji</button>
-  <button id="dl" title="Pobiera strefy.json — podmień nim plik public/config/strefy.json, żeby zmiany trafiły do wszystkich">⤓ strefy.json</button>
+  <button class="primary" id="save" title="Zapisuje strefy w przeglądarce. Wizualizacja użyje ich od razu i po każdym otwarciu">💾 Zapisz do aplikacji</button>
+  <button id="dl" title="Pobiera strefy.json. Podmień nim plik public/config/strefy.json, żeby zmiany trafiły do wszystkich">⤓ strefy.json</button>
   <label class="sw" title="Wczytaj strefy z pliku JSON">⤒ wczytaj <input type="file" id="imp" accept=".json,application/json" style="display:none" /></label>
   <button id="revert" title="Odrzuca zapis lokalny i wraca do config/strefy.json">↺ Z pliku</button>
   <span id="status"></span>
@@ -101,7 +101,7 @@
         <button id="pColorReset" title="Wróć do domyślnego koloru typu" style="flex:0 0 auto">↺ typ</button>
       </div>
       <div class="row"><label>minuty</label><input id="pMin" type="number" placeholder="(opcjonalnie)" /></div>
-      <div class="dim">rozmiar: <b id="dimTxt">—</b></div>
+      <div class="dim">rozmiar: <b id="dimTxt">-</b></div>
 
       <h2>Pozycja (knoby)</h2>
       <div class="pad">
@@ -133,8 +133,8 @@
       Przeciągnij środek = przesuń, biały róg = zmień rozmiar (kotwiczy od lewego-górnego rogu).
       Klawiatura: <b>strzałki</b> = pozycja, <b>Shift+strzałki</b> = rozmiar.
       <br/><br/>
-      <b>Jak to działa:</b> „Zapisz do aplikacji” zapisuje strefy w tej przeglądarce —
-      wizualizacja 3D wczyta je automatycznie (także na żywo, gdy jest otwarta w drugiej karcie).
+      <b>Jak to działa:</b> „Zapisz do aplikacji” zapisuje strefy w tej przeglądarce,
+      a wizualizacja 3D wczyta je automatycznie (także na żywo, gdy jest otwarta w drugiej karcie).
       Żeby zmiany zobaczyli <b>wszyscy</b> (inny komputer / nowa instalacja), pobierz
       „⤓ strefy.json” i podmień plik <b>config/strefy.json</b> obok aplikacji.
     </div>
@@ -218,7 +218,7 @@ function cleanSectors(list){
 // Start: nowszy z pary (zapis lokalny edytora, config/strefy.json).
 async function loadSectors(){
   if (location.protocol === 'file:') {
-    setStatus('⚠ Otwarto z dysku (file:) — otwórz edytor przez adres aplikacji, np. http://…/edytor_stref.html', true);
+    setStatus('⚠ Otwarto z dysku (file:). Otwórz edytor przez adres aplikacji, np. http://…/edytor_stref.html', true);
     render(); updatePanel(); return;
   }
   let stored = null;
@@ -235,12 +235,12 @@ async function loadSectors(){
   } catch {}
   if (stored && stored.savedAt >= fileAt) { sectors = stored.sectors; setStatus('Wczytano zapis edytora (nowszy niż config/strefy.json)'); }
   else if (fileSectors) { sectors = fileSectors; setStatus('Wczytano config/strefy.json'); }
-  else setStatus('⚠ Brak config/strefy.json — używam domyślnych stref', true);
+  else setStatus('⚠ Brak config/strefy.json, używam domyślnych stref', true);
   sel = -1; render(); updatePanel();
 }
 
 // Podglad na zywo: aplikacja otwarta w drugiej karcie przebudowuje strefy
-// w trakcie edycji (bez zapisu — po odswiezeniu wraca do stanu zapisanego).
+// w trakcie edycji (bez zapisu; po odswiezeniu wraca do stanu zapisanego).
 let liveTimer = null;
 function broadcastLive(){
   if(!channel || !document.getElementById('live').checked) return;
@@ -251,7 +251,7 @@ function broadcastLive(){
 document.getElementById('save').onclick = function(){
   localStorage.setItem(STORAGE_KEY, JSON.stringify({ savedAt: new Date().toISOString(), sectors }));
   channel?.postMessage({ sectors });
-  setStatus('✓ Zapisano — wizualizacja używa nowych stref');
+  setStatus('✓ Zapisano, wizualizacja używa nowych stref');
 };
 
 document.getElementById('dl').onclick = ()=>{
@@ -260,7 +260,7 @@ document.getElementById('dl').onclick = ()=>{
   a.href = URL.createObjectURL(new Blob([data], { type:'application/json' }));
   a.download = 'strefy.json'; a.click();
   URL.revokeObjectURL(a.href);
-  setStatus('Pobrano strefy.json — podmień nim public/config/strefy.json');
+  setStatus('Pobrano strefy.json. Podmień nim public/config/strefy.json');
 };
 
 document.getElementById('imp').onchange = (e)=>{
@@ -272,7 +272,7 @@ document.getElementById('imp').onchange = (e)=>{
       const s = cleanSectors(d.sectors ?? d);
       if(!s) { setStatus('⚠ Zły format pliku JSON', true); return; }
       sectors = s; sel = -1; render(); updatePanel(); broadcastLive();
-      setStatus('Wczytano strefy z pliku — pamiętaj „Zapisz do aplikacji”');
+      setStatus('Wczytano strefy z pliku. Pamiętaj o „Zapisz do aplikacji”');
     } catch { setStatus('⚠ Nie udało się odczytać pliku JSON', true); }
   };
   r.readAsText(f); e.target.value = '';
@@ -293,7 +293,7 @@ function drawRef(){
   h += `<rect x="372" y="150" width="500" height="60" fill="#d97706" fill-opacity="0.12"></rect>`;
   h += `<text class="reftxt" x="622" y="184" text-anchor="middle" fill="#b45309">odcinek z buforem (przelot)</text>`;
   // znaczniki stacji
-  h += `<text class="reftxt" x="650" y="232" text-anchor="middle">LINIA — rolotok (pozycje stacji po zmianach)</text>`;
+  h += `<text class="reftxt" x="650" y="232" text-anchor="middle">LINIA: rolotok (pozycje stacji po zmianach)</text>`;
   gRef.innerHTML = h;
 }
 drawRef();
@@ -368,7 +368,7 @@ svg.addEventListener('pointerup', ()=>{
   drag=null; render(); updatePanel();
 });
 
-// Przyciaganie krawedzi — TYLKO po puszczeniu i TYLKO jedno najblizsze
+// Przyciaganie krawedzi: TYLKO po puszczeniu i TYLKO jedno najblizsze
 // dociagniecie na os (max 8px), zeby element nigdy nie "teleportowal".
 function snap(i){
   const T=8, s=sectors[i];
@@ -386,7 +386,7 @@ function snap(i){
 // ---- Panel / knoby ----
 function updatePanel(){
   const box = document.getElementById('props');
-  if(sel<0){ box.style.opacity=.4; dimTxt.textContent='—'; return; } box.style.opacity=1;
+  if(sel<0){ box.style.opacity=.4; dimTxt.textContent='-'; return; } box.style.opacity=1;
   const s = sectors[sel];
   pLabel.value=s.label; pType.value=s.type; pMin.value=s.minutes??'';
   pColor.value = s.color || COLORS[s.type] || '#64748b';

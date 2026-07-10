@@ -1,6 +1,6 @@
 node_modules/
 
-# Build output — Vercel odtwarza go z `npm run build` (outputDirectory: dist)
+# Build output. Vercel odtwarza go z `npm run build` (outputDirectory: dist)
 dist/
 
 # Logi
@@ -8,6 +8,3 @@ dist/
 
 # Vercel
 .vercel
-
-# Lokalna konfiguracja Claude Code (nie kod projektu)
-.claude/

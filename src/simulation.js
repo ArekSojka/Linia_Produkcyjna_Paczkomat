@@ -1,7 +1,7 @@
 // =====================================================================
 // RDZEN SYMULACJI LINII (czysta logika, bez React / three-addons).
 // Importuje TYLKO rdzen `three` (THREE.Vector3), wiec dziala rowniez w
-// Node — dzieki temu harmonogram da sie testowac regresyjnie poza przegladarka
+// Node; dzieki temu harmonogram da sie testowac regresyjnie poza przegladarka
 // (patrz test/simulation.test.mjs). main.jsx importuje stad wszystkie symbole.
 // =====================================================================
 import * as THREE from 'three';
@@ -118,7 +118,7 @@ export const TUNE = {
   halfGapX: 0,
   // Pionowe dociagniecie stojacych kolumn (ujemne = nizej, gdy lewituja).
   columnSettleY: 0,
-  // === KOREKTA POZYCJI FINALNEJ (czesci na podstawie) — strojenie milimetrowe ===
+  // === KOREKTA POZYCJI FINALNEJ (czesci na podstawie): strojenie milimetrowe ===
   // Dziala dopiero gdy polowy stoja na podstawie. Male wartosci, np. -0.02.
   finalNudgeX: 0.01,  // bok (X): + na zewnatrz, - do srodka
   finalNudgeZ: -0.08,  // wzdluz podstawy (Z): + do przodu, - do tylu
@@ -171,7 +171,7 @@ export const TUNE = {
   // (jeden rzad PONIZEJ ostatniej skrytki, przy dolnej krawedzi). + = nizej
   // (blizej podstawy), - = wyzej. Reguluj, gdy nie jest idealnie rowno z dolem.
   baseShelfNudgeZ: 0,
-  // === KAMERA (OrbitControls) — katy i zakres zoomu ===
+  // === KAMERA (OrbitControls): katy i zakres zoomu ===
   camera: {
     minDistance: 5,                 // jak blisko mozna dojechac (zoom in)
     maxDistance: 110,               // jak daleko mozna oddalic (zoom out)
@@ -179,7 +179,7 @@ export const TUNE = {
     maxPolarAngle: Math.PI * 0.49,  // najnizsze ujecie (~plasko z boku); wieksze = nizej
     moveSpeed: 14,                  // predkosc przesuwania klawiszami WASD (jednostki/s)
   },
-  // === OBROT KORYT DO PIONU (etap 2) — strojenie wygladu ===
+  // === OBROT KORYT DO PIONU (etap 2): strojenie wygladu ===
   // portion: jaka czesc etapu trwa obrot (mniej = szybciej).
   // arcLift: chwilowe uniesienie w trakcie obrotu, by koryta nie szly przez rolki (np. 0.3).
   // pose0/pose1: pozycja KAZDEGO z dwoch koryt podczas lezenia. Zmniejsz offsetX,
@@ -195,7 +195,7 @@ export const TUNE = {
     pose0: { rotationX: 0, rotationY: 0, rotationZ: 0, offsetX: 1.04, offsetY: 0.7, offsetZ: 0 },
     pose1: { rotationX: 0, rotationY: 0, rotationZ: 180, offsetX: 1.04, offsetY: -1.64, offsetZ: 0 },
     // Niezalezna, UTRWALONA korekta OSOBNO dla duzego i malego koryta (rot w stopniach, pos w metrach).
-    // Dziala zawsze, tez w pionie — pozwala obracac/przesuwac kazdy typ koryta osobno.
+    // Dziala zawsze, tez w pionie. Pozwala obracac/przesuwac kazdy typ koryta osobno.
     large: { rot: [0, 0, 0], pos: [0, 0, 0] }, // duze (srodkowe) koryto
     small: { rot: [0, 0, 0], pos: [0, 0, 0] }, // male koryto
   },
@@ -335,7 +335,7 @@ export const TUNE = {
     // Paleta stojaca na koncu rolotoku (miejsce wlozenia w podstawe, etap 3).
     showEndPallet: true,
     // O ile (swiat) paleta na koncu rolotoku jest ZA ostatnia stacja, wzdluz linii.
-    // Ostatnia stacja jest POD podniesiona tasma — paleta musi stac DALEJ, na
+    // Ostatnia stacja jest POD podniesiona tasma, wiec paleta musi stac DALEJ, na
     // ziemi za koncem rolotoku, zeby spuszczac na nia paczkomaty. Zwieksz, gdy
     // paleta wchodzi pod tasme; zmniejsz, gdy odjechala za daleko.
     endPalletGap: 5,
@@ -423,7 +423,7 @@ export const buildLinePoints = (stagesOrCount) => {
   // Rozstaw stacji = dlugosc rolotoku. Wiekszy = dluzsza tasma i wieksze
   // odstepy miedzy czesciami (zeby nie nachodzily). Strojone przez TUNE.
   // UWAGA: etap offline (ostatni, gdy wlaczony) NIE jest stacja rolotoku, wiec
-  // nie dostaje punktu na linii — punkty obejmuja tylko stacje rolotoku.
+  // nie dostaje punktu na linii; punkty obejmuja tylko stacje rolotoku.
   const conveyorCount = isOfflineEnabled(stagesOrCount) ? Math.max(count - 1, 1) : count;
   const n = Math.max(conveyorCount, 1);
   const spacing = TUNE.stationSpacing ?? 7.6;
@@ -724,14 +724,14 @@ export const buildProductionSchedule = (
       // BACK-PRESSURE: paczkomat NIE rusza z konca rolotoku, dopoki najwczesniej
       // wolne stanowisko offline nie bedzie gotowe go przyjac w chwili dojazdu.
       // Praca zaczyna sie max(gotowy + dojazd, serwer wolny). Paleta CZEKA na
-      // etapie 3 (blokujac stacje) az do chwili wyjazdu — dzieki temu, gdy oba
+      // etapie 3 (blokujac stacje) az do chwili wyjazdu. Dzieki temu, gdy oba
       // stanowiska sa zajete, kolejny paczkomat czeka, a nie najezdza na zajete.
       const offlineStart = Math.max(insertionDone + palletTravel, serverFreeAt);
       const palletArrive = offlineStart;
       const palletDepart = offlineStart - palletTravel; // >= insertionDone (czeka na E3)
       const offlineEnd = offlineStart + offlineDuration;
       // Serwer offline zajety od startu pracy az do KONCA PRZEZBROJENIA (zjazdu
-      // gotowej palety). Dopiero wtedy moze wjechac nastepna — bez nakladania sie.
+      // gotowej palety). Dopiero wtedy moze wjechac nastepna, bez nakladania sie.
       // palletTravel to latencja dojazdu, nie zajetosc serwera.
       offlineFreeAt[serverIndex] = offlineEnd + offlineChangeover;
 
@@ -767,7 +767,7 @@ export const buildProductionSchedule = (
         });
         // Zjazd/prezentacja gotowego paczkomatu (paleta odjezdza ze stanowiska).
         // Trwa dokladnie tyle co przezbrojenie, wiec nastepna paleta wjezdza
-        // dopiero gdy ta zniknie. resource=null — para (lead+trail) jedzie razem.
+        // dopiero gdy ta zniknie. resource=null, bo para (lead+trail) jedzie razem.
         unit.segments.push({
           type: 'offlineDone',
           resource: null,
@@ -809,7 +809,7 @@ export const buildProductionSchedule = (
   // linii). Bierzemy OGON odstepow (druga polowa) i USREDNIAMY go: przy back-
   // pressure od etapu offline pierwszy zablokowany start daje chwilowy przeskok
   // wiekszy niz takt graniczny, a przy N rownoleglych stanowiskach kolejne starty
-  // przeplataja sie wokol taktu — srednia ogona daje stabilna wartosc graniczna.
+  // przeplataja sie wokol taktu; srednia ogona daje stabilna wartosc graniczna.
   // Dla malej liczby sztuk (brak ustalenia) uzywamy wszystkich odstepow.
   let steadyTakt = Math.max(stages[0]?.duration ?? 0, 0.1);
   if (startGaps.length) {

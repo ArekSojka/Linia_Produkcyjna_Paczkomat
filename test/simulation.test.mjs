@@ -1,4 +1,4 @@
-// Test regresji RDZENIA SYMULACJI (harmonogram linii) — uruchamiany w Node.
+// Test regresji RDZENIA SYMULACJI (harmonogram linii), uruchamiany w Node.
 // Uruchom:  node test/simulation.test.mjs
 // Sprawdza niezmienniki: brak nakladania zasobow (tez serwerow offline),
 // czasy montazu == durations, czasy przejazdu == travelTimes, monotonicznosc,
@@ -54,7 +54,7 @@ function runScenario(name, durations, count, fn) {
     if (!res.startsWith('offline:')) return;
     list.sort((a, b) => a.start - b.start);
     for (let i = 1; i < list.length; i += 1) {
-      // Lead+trail tej SAMEJ sztuki dziela serwer (jeden paczkomat na palecie) —
+      // Lead+trail tej SAMEJ sztuki dziela serwer (jeden paczkomat na palecie);
       // to celowe wspoldzielenie, nie konflikt. Sprawdzamy tylko ROZNE sztuki.
       if (list[i].number === list[i - 1].number) continue;
       ok(list[i].start >= list[i - 1].end - 1e-6,
@@ -109,7 +109,7 @@ runScenario('A: standard 5 etapow', [10, 10, 10, 10, 10], 6, (schedule) => {
 
 // Scenariusz B: etap offline jest WASKIM GARDLEM (dlugi), N=2 -> takt ≈ czas/2.
 // Czas offline musi byc na tyle duzy, by offlineTakt = czas/N przewyzszal takt
-// rolotoku — wtedy serwery pracuja bez przerwy i ukonczenia padaja co czas/N.
+// rolotoku; wtedy serwery pracuja bez przerwy i ukonczenia padaja co czas/N.
 const OFF = 80;
 runScenario('B: offline bottleneck, N=2', [5, 5, 5, 5, OFF], 20, (schedule) => {
   const N = schedule.offlineServerCount;
@@ -137,7 +137,7 @@ runScenario('B: offline bottleneck, N=2', [5, 5, 5, 5, OFF], 20, (schedule) => {
     `launchInterval (${schedule.launchInterval.toFixed(2)}) ~ offlineTakt (${schedule.offlineTakt}) w granicach 10%`);
 });
 
-// Scenariusz C: jedna sztuka (rozbieg) — soloCycleTime zawiera dojazd palety.
+// Scenariusz C: jedna sztuka (rozbieg). soloCycleTime zawiera dojazd palety.
 runScenario('C: jedna sztuka', [10, 10, 10, 10, 10], 1, (schedule) => {
   ok(schedule.palletTravel === TUNE.offline.palletTravel,
     `palletTravel == ${TUNE.offline.palletTravel} (jest ${schedule.palletTravel})`);
